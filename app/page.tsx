@@ -278,7 +278,10 @@ export default function POSSystem() {
               </div>
               KWIKI CONVENIENCE
             </div>
-            <div className="text-sm bg-white/20 px-3 py-1 rounded-full">966 ST CLAIR AVE WEST</div>
+            <div className="text-sm bg-white/20 px-3 py-1 rounded-full">
+              {new Date().toLocaleDateString()}{" "}
+              {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </div>
           </div>
         </div>
       </header>
