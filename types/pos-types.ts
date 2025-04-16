@@ -17,13 +17,22 @@ export interface CartItem {
   quantity: number
 }
 
+export interface Discount {
+  type: "percentage" | "fixed"
+  value: number
+  description: string
+}
+
 export interface Transaction {
   id: string
   items: CartItem[]
   subtotal: number
+  discount?: Discount
+  discountAmount?: number
   tax: number
   total: number
   timestamp: Date
   paymentMethod: string
   isReturn: boolean
+  taxApplied: boolean
 }

@@ -8,12 +8,13 @@ import Receipt from "@/components/receipt"
 import Reports from "@/components/reports"
 import InventoryManagement from "@/components/inventory-management"
 import ManualEntryModal from "@/components/manual-entry-modal"
-import type { Product, CartItem, Transaction } from "@/types/pos-types"
+import type { Product, CartItem, Transaction, Discount } from "@/types/pos-types"
 import { mockProducts } from "@/data/mock-products"
 import { saveTransaction, getTransactions } from "@/services/transaction-service"
 import { saveProducts, getProducts } from "@/services/product-service"
 import { toast } from "@/components/ui/use-toast"
 import { Toaster } from "@/components/ui/toaster"
+import { ShoppingCartIcon as CartIcon } from "lucide-react"
 
 export default function POSSystem() {
   const [activeTab, setActiveTab] = useState("pos")
@@ -21,18 +22,23 @@ export default function POSSystem() {
   const [receipt, setReceipt] = useState<{
     items: CartItem[]
     subtotal: number
+    discountAmount?: number
+    discount?: Discount
     tax: number
     total: number
     transactionId: string
     timestamp: Date
     paymentMethod: string
     isReturn: boolean
+    taxApplied: boolean
   } | null>(null)
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false)
   const [manualEntryProduct, setManualEntryProduct] = useState<Product | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [taxEnabled, setTaxEnabled] = useState(true)
+  const [discount, setDiscount] = useState<Discount | null>(null)
 
   // Load transactions and products from Supabase on initial render
   useEffect(() => {
@@ -144,12 +150,39 @@ export default function POSSystem() {
 
   const clearCart = () => {
     setCart([])
+    setDiscount(null)
   }
 
+  const toggleTax = () => {
+    setTaxEnabled(!taxEnabled)
+  }
+
+  const handleApplyDiscount = (newDiscount: Discount) => {
+    setDiscount(newDiscount)
+  }
+
+  const handleRemoveDiscount = () => {
+    setDiscount(null)
+  }
+
+  // Update the completeTransaction function to handle the case where discount columns might not exist
   const completeTransaction = async (paymentMethod: string, isReturn = false) => {
     const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0)
-    const tax = subtotal * 0.08 // 8% tax rate
-    const total = subtotal + tax
+
+    // Calculate discount amount
+    const discountAmount = discount
+      ? discount.type === "percentage"
+        ? (subtotal * discount.value) / 100
+        : discount.value
+      : 0
+
+    // Calculate subtotal after discount
+    const subtotalAfterDiscount = Math.max(0, subtotal - discountAmount)
+
+    // Calculate tax amount (13% for Toronto)
+    const tax = taxEnabled ? subtotalAfterDiscount * 0.13 : 0
+
+    const total = subtotalAfterDiscount + tax
 
     const transactionId = `TX-${Date.now().toString().slice(-6)}`
     const timestamp = new Date()
@@ -157,15 +190,18 @@ export default function POSSystem() {
     const newReceipt = {
       items: [...cart],
       subtotal,
+      discount: discount || undefined,
+      discountAmount: discountAmount || undefined,
       tax,
       total: isReturn ? -total : total,
       transactionId,
       timestamp,
       paymentMethod,
       isReturn,
+      taxApplied: taxEnabled,
     }
 
-    // Create transaction object
+    // Create transaction object - only include essential fields for database
     const newTransaction: Transaction = {
       id: transactionId,
       items: [...cart],
@@ -175,6 +211,15 @@ export default function POSSystem() {
       timestamp,
       paymentMethod,
       isReturn,
+      taxApplied: taxEnabled,
+    }
+
+    // Add discount information to memory only, not for database persistence
+    // This avoids the error with missing columns
+    if (discount) {
+      // For UI and local state only
+      newReceipt.discount = discount
+      newReceipt.discountAmount = discountAmount
     }
 
     try {
@@ -182,8 +227,14 @@ export default function POSSystem() {
       const success = await saveTransaction(newTransaction)
 
       if (success) {
-        // Add to local transactions state
-        setTransactions((prev) => [newTransaction, ...prev])
+        // Add to local transactions state with discount info for UI
+        const transactionWithDiscount = {
+          ...newTransaction,
+          discount: discount || undefined,
+          discountAmount: discountAmount || undefined,
+        }
+
+        setTransactions((prev) => [transactionWithDiscount, ...prev])
         setReceipt(newReceipt)
         setActiveTab("receipt")
         clearCart()
@@ -208,6 +259,8 @@ export default function POSSystem() {
   const startNewTransaction = () => {
     setReceipt(null)
     setActiveTab("pos")
+    setDiscount(null)
+    setTaxEnabled(true)
   }
 
   const handleProductsChange = (updatedProducts: Product[]) => {
@@ -216,15 +269,23 @@ export default function POSSystem() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-slate-800 text-white shadow-md">
+      <header className="bg-gradient-to-r from-blue-600 via-blue-500 to-pink-500 text-white shadow-md">
         <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
-          <h1 className="text-2xl font-bold">QuickServe POS</h1>
+          <div className="flex items-center justify-between">
+            <div className="text-2xl font-bold cursor-pointer flex items-center" onClick={startNewTransaction}>
+              <div className="bg-white text-blue-600 rounded-full p-2 mr-3 shadow-lg">
+                <CartIcon className="h-6 w-6" />
+              </div>
+              KWIKI CONVENIENCE
+            </div>
+            <div className="text-sm bg-white/20 px-3 py-1 rounded-full">966 ST CLAIR AVE WEST</div>
+          </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8 space-y-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-4 mb-8 bg-slate-100 p-1 rounded-xl shadow-sm border border-slate-200">
+          <TabsList className="grid w-full grid-cols-4 mb-8 bg-slate-100 p-1 rounded-xl shadow-sm border border-gradient-secondary">
             <TabsTrigger
               value="pos"
               disabled={activeTab === "receipt"}
@@ -256,10 +317,10 @@ export default function POSSystem() {
           </TabsList>
 
           <TabsContent value="pos" className="space-y-4">
-            {/* Side-by-side layout with 30% cart and 70% products */}
+            {/* Side-by-side layout with 40% cart and 60% products */}
             <div className="flex flex-col md:flex-row gap-4">
-              {/* Shopping Cart - 30% width */}
-              <div className="md:w-[30%]">
+              {/* Shopping Cart - 40% width */}
+              <div className="md:w-[40%]">
                 <ShoppingCart
                   cart={cart}
                   onUpdateQuantity={updateQuantity}
@@ -270,11 +331,16 @@ export default function POSSystem() {
                     setManualEntryProduct(null)
                     setIsManualEntryOpen(true)
                   }}
+                  taxEnabled={taxEnabled}
+                  onTaxToggle={toggleTax}
+                  discount={discount}
+                  onApplyDiscount={handleApplyDiscount}
+                  onRemoveDiscount={handleRemoveDiscount}
                 />
               </div>
 
-              {/* Product Catalog - 70% width */}
-              <div className="md:w-[70%]">
+              {/* Product Catalog - 60% width */}
+              <div className="md:w-[60%]">
                 <ProductCatalog
                   products={products}
                   onAddToCart={addToCart}
