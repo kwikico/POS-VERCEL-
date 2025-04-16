@@ -344,5 +344,5 @@ export default function ShoppingCart({
         </div>
       </CardContent>
     </Card>
-  \
+  )
 }
