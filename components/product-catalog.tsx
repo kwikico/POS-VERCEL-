@@ -118,7 +118,7 @@ export default function ProductCatalog({
     // If input looks like a complete barcode and ends with Enter key character
     if (barcodeRegex.test(value.trim()) && value.includes("\n")) {
       // Remove the Enter key character
-      const cleanBarcode = value.trim().replace("\n", "")
+      const cleanBarcode = value.trim().replace(/\n/g, "")
       setSearchQuery(cleanBarcode)
 
       // Find product by barcode
