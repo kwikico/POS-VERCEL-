@@ -1,20 +1,23 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent } from "@/components/ui/tabs"
 import ProductCatalog from "@/components/product-catalog"
 import ShoppingCart from "@/components/shopping-cart"
-import Receipt from "@/components/receipt"
+import ReceiptComponent from "@/components/receipt"
 import Reports from "@/components/reports"
 import InventoryManagement from "@/components/inventory-management"
 import ManualEntryModal from "@/components/manual-entry-modal"
 import type { Product, CartItem, Transaction, Discount } from "@/types/pos-types"
 import { mockProducts } from "@/data/mock-products"
-import { saveTransaction, getTransactions } from "@/services/transaction-service"
-import { saveProducts, getProducts } from "@/services/product-service"
+import { ProductService, TransactionService } from "@/services/data-service"
 import { toast } from "@/components/ui/use-toast"
 import { Toaster } from "@/components/ui/toaster"
-import { ShoppingCartIcon as CartIcon } from "lucide-react"
+import { ShoppingCartIcon as CartIcon, ShoppingBag, BarChart3, Package, Receipt, AlertTriangle } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { calculateOrderTotals, generateTransactionId } from "@/lib/utils"
+import { ErrorBoundary } from "@/components/error-boundary"
+import { validateDatabaseSchema } from "@/lib/schema-validation"
 
 export default function POSSystem() {
   const [activeTab, setActiveTab] = useState("pos")
@@ -39,23 +42,41 @@ export default function POSSystem() {
   const [isLoading, setIsLoading] = useState(true)
   const [taxEnabled, setTaxEnabled] = useState(true)
   const [discount, setDiscount] = useState<Discount | null>(null)
+  const [schemaValidationError, setSchemaValidationError] = useState<string | null>(null)
 
   // Load transactions and products from Supabase on initial render
   useEffect(() => {
     async function loadData() {
       setIsLoading(true)
       try {
+        // Validate database schema
+        const schemaValidation = await validateDatabaseSchema()
+        if (!schemaValidation.isValid) {
+          console.error("Database schema validation failed:", schemaValidation)
+          if (schemaValidation.missingTables.length > 0) {
+            setSchemaValidationError(
+              `Missing tables: ${schemaValidation.missingTables.join(", ")}. Please run the database migration.`,
+            )
+          } else if (Object.keys(schemaValidation.missingColumns).length > 0) {
+            const missingColumnsText = Object.entries(schemaValidation.missingColumns)
+              .map(([table, columns]) => `${table}: ${columns.join(", ")}`)
+              .join("; ")
+            setSchemaValidationError(`Missing columns: ${missingColumnsText}. Please run the database migration.`)
+          }
+          // Continue loading anyway to allow the app to work with mock data
+        }
+
         // Load transactions from Supabase
-        const fetchedTransactions = await getTransactions()
+        const fetchedTransactions = await TransactionService.getAll()
         setTransactions(fetchedTransactions)
 
         // Load products from Supabase
-        const fetchedProducts = await getProducts()
+        const fetchedProducts = await ProductService.getAll()
 
         // If no products in database yet, use mock products and save them
         if (fetchedProducts.length === 0) {
           setProducts(mockProducts)
-          await saveProducts(mockProducts)
+          await ProductService.save(mockProducts)
         } else {
           setProducts(fetchedProducts)
         }
@@ -80,7 +101,7 @@ export default function POSSystem() {
   // Save products to Supabase whenever they change
   useEffect(() => {
     if (products.length > 0 && !isLoading) {
-      saveProducts(products).catch((error) => {
+      ProductService.save(products).catch((error) => {
         console.error("Failed to save products:", error)
       })
     }
@@ -135,6 +156,17 @@ export default function POSSystem() {
     setIsManualEntryOpen(false)
   }
 
+  const handleAddProduct = (newProduct: Product) => {
+    // Add the new product to the products state
+    setProducts((prevProducts) => [...prevProducts, newProduct])
+
+    // Show success toast
+    toast({
+      title: "Product Added",
+      description: `${newProduct.name} has been added to inventory.`,
+    })
+  }
+
   const updateQuantity = (productId: string, quantity: number) => {
     if (quantity <= 0) {
       removeFromCart(productId)
@@ -165,26 +197,14 @@ export default function POSSystem() {
     setDiscount(null)
   }
 
-  // Update the completeTransaction function to handle the case where discount columns might not exist
   const completeTransaction = async (paymentMethod: string, isReturn = false) => {
-    const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0)
+    const { subtotal, discountAmount, tax, total } = calculateOrderTotals({
+      items: cart,
+      discount,
+      taxEnabled,
+    })
 
-    // Calculate discount amount
-    const discountAmount = discount
-      ? discount.type === "percentage"
-        ? (subtotal * discount.value) / 100
-        : discount.value
-      : 0
-
-    // Calculate subtotal after discount
-    const subtotalAfterDiscount = Math.max(0, subtotal - discountAmount)
-
-    // Calculate tax amount (13% for Toronto)
-    const tax = taxEnabled ? subtotalAfterDiscount * 0.13 : 0
-
-    const total = subtotalAfterDiscount + tax
-
-    const transactionId = `TX-${Date.now().toString().slice(-6)}`
+    const transactionId = generateTransactionId()
     const timestamp = new Date()
 
     const newReceipt = {
@@ -201,11 +221,13 @@ export default function POSSystem() {
       taxApplied: taxEnabled,
     }
 
-    // Create transaction object - only include essential fields for database
+    // Create transaction object
     const newTransaction: Transaction = {
       id: transactionId,
       items: [...cart],
       subtotal,
+      discount: discount || undefined,
+      discountAmount: discountAmount || undefined,
       tax,
       total: isReturn ? -total : total,
       timestamp,
@@ -214,27 +236,12 @@ export default function POSSystem() {
       taxApplied: taxEnabled,
     }
 
-    // Add discount information to memory only, not for database persistence
-    // This avoids the error with missing columns
-    if (discount) {
-      // For UI and local state only
-      newReceipt.discount = discount
-      newReceipt.discountAmount = discountAmount
-    }
-
     try {
       // Save transaction to Supabase
-      const success = await saveTransaction(newTransaction)
+      const success = await TransactionService.save(newTransaction)
 
       if (success) {
-        // Add to local transactions state with discount info for UI
-        const transactionWithDiscount = {
-          ...newTransaction,
-          discount: discount || undefined,
-          discountAmount: discountAmount || undefined,
-        }
-
-        setTransactions((prev) => [transactionWithDiscount, ...prev])
+        setTransactions((prev) => [newTransaction, ...prev])
         setReceipt(newReceipt)
         setActiveTab("receipt")
         clearCart()
@@ -267,122 +274,173 @@ export default function POSSystem() {
     setProducts(updatedProducts)
   }
 
+  const handleOpenManualEntry = () => {
+    setManualEntryProduct(null)
+    setIsManualEntryOpen(true)
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-gradient-to-r from-blue-600 via-blue-500 to-pink-500 text-white shadow-md">
-        <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between">
-            <div className="text-2xl font-bold cursor-pointer flex items-center" onClick={startNewTransaction}>
-              <div className="bg-white text-blue-600 rounded-full p-2 mr-3 shadow-lg">
-                <CartIcon className="h-6 w-6" />
+    <ErrorBoundary>
+      <div className="min-h-screen bg-gray-50">
+        <header className="bg-gradient-to-r from-blue-600 via-blue-500 to-pink-500 text-white shadow-md">
+          <div className="max-w-7xl mx-auto px-4 py-3 sm:px-6 lg:px-8">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="text-2xl font-bold cursor-pointer flex items-center" onClick={startNewTransaction}>
+                <div className="bg-white text-blue-600 rounded-full p-2 mr-3 shadow-lg">
+                  <CartIcon className="h-6 w-6" />
+                </div>
+                KWIKI CONVENIENCE
               </div>
-              KWIKI CONVENIENCE
-            </div>
-            <div className="text-sm bg-white/20 px-3 py-1 rounded-full">
-              {new Date().toLocaleDateString()}{" "}
-              {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+
+              {/* Main Navigation Buttons */}
+              <div className="flex items-center space-x-1 sm:space-x-2 bg-white/10 p-1 rounded-xl shadow-inner">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setActiveTab("pos")}
+                  disabled={activeTab === "receipt"}
+                  className={`nav-btn flex items-center ${
+                    activeTab === "pos" ? "nav-btn-active" : "text-white/90 hover:text-white"
+                  }`}
+                >
+                  <ShoppingBag className="h-4 w-4 mr-1" />
+                  <span>Point of Sale</span>
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setActiveTab("reports")}
+                  disabled={activeTab === "receipt"}
+                  className={`nav-btn flex items-center ${
+                    activeTab === "reports" ? "nav-btn-active" : "text-white/90 hover:text-white"
+                  }`}
+                >
+                  <BarChart3 className="h-4 w-4 mr-1" />
+                  <span>Reports</span>
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setActiveTab("inventory")}
+                  disabled={activeTab === "receipt"}
+                  className={`nav-btn flex items-center ${
+                    activeTab === "inventory" ? "nav-btn-active" : "text-white/90 hover:text-white"
+                  }`}
+                >
+                  <Package className="h-4 w-4 mr-1" />
+                  <span>Inventory</span>
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setActiveTab("receipt")}
+                  disabled={!receipt}
+                  className={`nav-btn flex items-center ${
+                    activeTab === "receipt" ? "nav-btn-active" : "text-white/90 hover:text-white"
+                  }`}
+                >
+                  <Receipt className="h-4 w-4 mr-1" />
+                  <span>Receipt</span>
+                </Button>
+              </div>
+
+              {/* Date/Time Display */}
+              <div className="text-sm bg-white/20 px-3 py-1 rounded-full">
+                {new Date().toLocaleDateString()}{" "}
+                {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </div>
             </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8 space-y-6">
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-4 mb-8 bg-slate-100 p-1 rounded-xl shadow-sm border border-gradient-secondary">
-            <TabsTrigger
-              value="pos"
-              disabled={activeTab === "receipt"}
-              className="data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow-sm"
-            >
-              Point of Sale
-            </TabsTrigger>
-            <TabsTrigger
-              value="reports"
-              disabled={activeTab === "receipt"}
-              className="data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow-sm"
-            >
-              Reports
-            </TabsTrigger>
-            <TabsTrigger
-              value="inventory"
-              disabled={activeTab === "receipt"}
-              className="data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow-sm"
-            >
-              Inventory
-            </TabsTrigger>
-            <TabsTrigger
-              value="receipt"
-              disabled={!receipt}
-              className="data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow-sm"
-            >
-              Receipt
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="pos" className="space-y-4">
-            {/* Side-by-side layout with 40% cart and 60% products */}
-            <div className="flex flex-col md:flex-row gap-4">
-              {/* Shopping Cart - 40% width */}
-              <div className="md:w-[40%]">
-                <ShoppingCart
-                  cart={cart}
-                  onUpdateQuantity={updateQuantity}
-                  onRemoveItem={removeFromCart}
-                  onClearCart={clearCart}
-                  onCheckout={completeTransaction}
-                  onOpenManualEntry={() => {
-                    setManualEntryProduct(null)
-                    setIsManualEntryOpen(true)
-                  }}
-                  taxEnabled={taxEnabled}
-                  onTaxToggle={toggleTax}
-                  discount={discount}
-                  onApplyDiscount={handleApplyDiscount}
-                  onRemoveDiscount={handleRemoveDiscount}
-                />
+        {schemaValidationError && (
+          <div className="bg-amber-50 border-l-4 border-amber-500 p-4 mb-4 max-w-7xl mx-auto">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <AlertTriangle className="h-5 w-5 text-amber-500" />
               </div>
-
-              {/* Product Catalog - 60% width */}
-              <div className="md:w-[60%]">
-                <ProductCatalog
-                  products={products}
-                  onAddToCart={addToCart}
-                  onOpenManualEntry={() => {
-                    setManualEntryProduct(null)
-                    setIsManualEntryOpen(true)
-                  }}
-                  isLoading={isLoading}
-                />
+              <div className="ml-3">
+                <p className="text-sm text-amber-700">
+                  {schemaValidationError}{" "}
+                  <a
+                    href="/api/migrate"
+                    className="font-medium underline hover:text-amber-800"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Run migration
+                  </a>
+                </p>
               </div>
             </div>
-          </TabsContent>
+          </div>
+        )}
 
-          <TabsContent value="reports">
-            <Reports transactions={transactions} />
-          </TabsContent>
+        <main className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8 space-y-6">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <TabsContent value="pos" className="space-y-4">
+              {/* Side-by-side layout with 40% cart and 60% products */}
+              <div className="flex flex-col md:flex-row gap-4">
+                {/* Shopping Cart - 40% width */}
+                <div className="md:w-[40%]">
+                  <ShoppingCart
+                    cart={cart}
+                    onUpdateQuantity={updateQuantity}
+                    onRemoveItem={removeFromCart}
+                    onClearCart={clearCart}
+                    onCheckout={completeTransaction}
+                    onOpenManualEntry={handleOpenManualEntry}
+                    taxEnabled={taxEnabled}
+                    onTaxToggle={toggleTax}
+                    discount={discount}
+                    onApplyDiscount={handleApplyDiscount}
+                    onRemoveDiscount={handleRemoveDiscount}
+                  />
+                </div>
 
-          <TabsContent value="inventory">
-            <InventoryManagement products={products} onProductsChange={handleProductsChange} />
-          </TabsContent>
+                {/* Product Catalog - 60% width */}
+                <div className="md:w-[60%]">
+                  <ProductCatalog
+                    products={products}
+                    onAddToCart={addToCart}
+                    onOpenManualEntry={handleOpenManualEntry}
+                    onAddProduct={handleAddProduct}
+                    isLoading={isLoading}
+                  />
+                </div>
+              </div>
+            </TabsContent>
 
-          <TabsContent value="receipt">
-            {receipt && <Receipt receipt={receipt} onStartNewTransaction={startNewTransaction} />}
-          </TabsContent>
-        </Tabs>
-      </main>
+            <TabsContent value="reports">
+              <Reports transactions={transactions} />
+            </TabsContent>
 
-      <ManualEntryModal
-        isOpen={isManualEntryOpen}
-        onClose={() => {
-          setIsManualEntryOpen(false)
-          setManualEntryProduct(null)
-        }}
-        onAdd={addManualItem}
-        initialName={manualEntryProduct?.name || "Custom Item"}
-        initialPrice={manualEntryProduct?.price?.toString() || ""}
-      />
+            <TabsContent value="inventory">
+              <InventoryManagement products={products} onProductsChange={handleProductsChange} />
+            </TabsContent>
 
-      <Toaster />
-    </div>
+            <TabsContent value="receipt">
+              {receipt && <ReceiptComponent receipt={receipt} onStartNewTransaction={startNewTransaction} />}
+            </TabsContent>
+          </Tabs>
+        </main>
+
+        <ManualEntryModal
+          isOpen={isManualEntryOpen}
+          onClose={() => {
+            setIsManualEntryOpen(false)
+            setManualEntryProduct(null)
+          }}
+          onAdd={addManualItem}
+          initialName={manualEntryProduct?.name || "Custom Item"}
+          initialPrice={manualEntryProduct?.price?.toString() || ""}
+        />
+
+        <Toaster />
+      </div>
+    </ErrorBoundary>
   )
 }

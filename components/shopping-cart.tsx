@@ -10,19 +10,16 @@ import {
   DollarSign,
   RotateCcw,
   PlusIcon,
-  Percent,
-  DollarSignIcon as DollarIcon,
+  Tag,
   ToggleLeft,
   ToggleRight,
-  Tag,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import DiscountModal from "@/components/discount-modal"
+import OrderSummary from "@/components/order-summary"
+import { calculateOrderTotals } from "@/lib/utils"
 import type { CartItem, Discount } from "@/types/pos-types"
 
 interface ShoppingCartProps {
@@ -53,38 +50,13 @@ export default function ShoppingCart({
   onRemoveDiscount,
 }: ShoppingCartProps) {
   const [transactionType, setTransactionType] = useState<"sale" | "return">("sale")
-  const [discountType, setDiscountType] = useState<"percentage" | "fixed">("percentage")
-  const [discountValue, setDiscountValue] = useState<string>("")
   const [isDiscountOpen, setIsDiscountOpen] = useState<boolean>(false)
 
-  const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0)
-
-  // Calculate discount amount
-  const discountAmount = discount
-    ? discount.type === "percentage"
-      ? (subtotal * discount.value) / 100
-      : discount.value
-    : 0
-
-  // Calculate subtotal after discount
-  const subtotalAfterDiscount = Math.max(0, subtotal - discountAmount)
-
-  // Calculate tax only if enabled
-  const tax = taxEnabled ? subtotalAfterDiscount * 0.13 : 0 // 13% tax rate for Toronto
-  const total = subtotalAfterDiscount + tax
-
-  const handleApplyDiscount = () => {
-    const parsedValue = Number.parseFloat(discountValue)
-    if (!isNaN(parsedValue) && parsedValue > 0) {
-      onApplyDiscount({
-        type: discountType,
-        value: parsedValue,
-        description: `${discountType === "percentage" ? parsedValue + "%" : "$" + parsedValue.toFixed(2)} discount`,
-      })
-      setDiscountValue("")
-      setIsDiscountOpen(false)
-    }
-  }
+  const { subtotal, discountAmount, tax, total } = calculateOrderTotals({
+    items: cart,
+    discount,
+    taxEnabled,
+  })
 
   return (
     <Card className="bg-white shadow-md border border-gradient-primary h-full">
@@ -191,88 +163,31 @@ export default function ShoppingCart({
         </div>
 
         {/* Discount UI */}
-        {!isDiscountOpen ? (
-          <div className="mb-2">
-            {discount ? (
-              <div className="flex justify-between items-center p-2 bg-blue-50 rounded-md mb-2">
-                <div>
-                  <span className="text-sm font-medium flex items-center">
-                    <Tag className="h-4 w-4 mr-1 text-blue-600" />
-                    {discount.description}
-                  </span>
-                </div>
-                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onRemoveDiscount}>
-                  <Trash2 className="h-4 w-4 text-blue-600" />
-                </Button>
+        <div className="mb-2">
+          {discount ? (
+            <div className="flex justify-between items-center p-2 bg-blue-50 rounded-md mb-2">
+              <div>
+                <span className="text-sm font-medium flex items-center">
+                  <Tag className="h-4 w-4 mr-1 text-blue-600" />
+                  {discount.description}
+                </span>
               </div>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full mb-2 border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-600"
-                onClick={() => setIsDiscountOpen(true)}
-              >
-                <Tag className="h-4 w-4 mr-2" />
-                Add Discount
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onRemoveDiscount}>
+                <Trash2 className="h-4 w-4 text-blue-600" />
               </Button>
-            )}
-          </div>
-        ) : (
-          <div className="bg-blue-50 p-3 rounded-md mb-2">
-            <h4 className="text-sm font-medium mb-2 flex items-center text-blue-800">
-              <Tag className="h-4 w-4 mr-1" /> Apply Discount
-            </h4>
-            <RadioGroup
-              defaultValue="percentage"
-              value={discountType}
-              onValueChange={(value) => setDiscountType(value as "percentage" | "fixed")}
-              className="flex space-x-2 mb-2"
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full mb-2 border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-600"
+              onClick={() => setIsDiscountOpen(true)}
             >
-              <div className="flex items-center space-x-1">
-                <RadioGroupItem value="percentage" id="percentage" />
-                <Label htmlFor="percentage" className="text-sm">
-                  Percentage (%)
-                </Label>
-              </div>
-              <div className="flex items-center space-x-1">
-                <RadioGroupItem value="fixed" id="fixed" />
-                <Label htmlFor="fixed" className="text-sm">
-                  Fixed ($)
-                </Label>
-              </div>
-            </RadioGroup>
-
-            <div className="flex mb-2 items-center">
-              <div className="relative flex-1">
-                <div className="absolute inset-y-0 left-0 flex items-center pl-2 pointer-events-none">
-                  {discountType === "percentage" ? (
-                    <Percent className="h-4 w-4 text-gray-500" />
-                  ) : (
-                    <DollarIcon className="h-4 w-4 text-gray-500" />
-                  )}
-                </div>
-                <Input
-                  type="number"
-                  value={discountValue}
-                  onChange={(e) => setDiscountValue(e.target.value)}
-                  placeholder={discountType === "percentage" ? "10" : "5.00"}
-                  className="pl-8"
-                  min="0"
-                  step={discountType === "percentage" ? "1" : "0.01"}
-                />
-              </div>
-            </div>
-
-            <div className="flex space-x-2">
-              <Button variant="outline" size="sm" className="flex-1" onClick={() => setIsDiscountOpen(false)}>
-                Cancel
-              </Button>
-              <Button size="sm" className="flex-1 bg-blue-600 hover:bg-blue-700" onClick={handleApplyDiscount}>
-                Apply
-              </Button>
-            </div>
-          </div>
-        )}
+              <Tag className="h-4 w-4 mr-2" />
+              Add Discount
+            </Button>
+          )}
+        </div>
 
         {/* Tax Toggle */}
         <div className="flex justify-between items-center mb-2 p-2 bg-slate-50 rounded-md">
@@ -289,30 +204,15 @@ export default function ShoppingCart({
         {/* Totals and checkout */}
         <div className="mt-auto">
           <div className="space-y-1.5 mb-4">
-            <div className="flex justify-between">
-              <span className="text-sm">Subtotal</span>
-              <span className="text-sm font-medium">${subtotal.toFixed(2)}</span>
-            </div>
-
-            {discount && discountAmount > 0 && (
-              <div className="flex justify-between text-blue-600">
-                <span className="text-sm">Discount</span>
-                <span className="text-sm font-medium">-${discountAmount.toFixed(2)}</span>
-              </div>
-            )}
-
-            {taxEnabled && (
-              <div className="flex justify-between">
-                <span className="text-sm">Tax (13%)</span>
-                <span className="text-sm font-medium">${tax.toFixed(2)}</span>
-              </div>
-            )}
-
-            <Separator className="my-2" />
-            <div className="flex justify-between">
-              <span className="font-semibold">Total</span>
-              <span className="font-semibold">${total.toFixed(2)}</span>
-            </div>
+            <OrderSummary
+              subtotal={subtotal}
+              discount={discount || undefined}
+              discountAmount={discountAmount}
+              tax={tax}
+              total={total}
+              isReturn={transactionType === "return"}
+              taxApplied={taxEnabled}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -342,6 +242,9 @@ export default function ShoppingCart({
             </Button>
           </div>
         </div>
+
+        {/* Discount Modal */}
+        <DiscountModal isOpen={isDiscountOpen} onClose={() => setIsDiscountOpen(false)} onApply={onApplyDiscount} />
       </CardContent>
     </Card>
   )

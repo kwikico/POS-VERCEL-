@@ -2,6 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
+@import "./header-buttons.css";
+
 @layer base {
   :root {
     --background: 0 0% 100%;
@@ -115,4 +117,44 @@
   background: linear-gradient(to right, #3b82f6, #f97316);
   border-radius: 0.6rem;
   z-index: -1;
+}
+
+/* Header button styles */
+.header-button {
+  @apply bg-white/20 hover:bg-white/30 text-white border-white/30 transition-all duration-200;
+}
+
+.header-button:hover {
+  @apply shadow-md;
+  transform: translateY(-1px);
+}
+
+.header-button:active {
+  @apply shadow-inner;
+  transform: translateY(1px);
+}
+
+/* Navigation button styles */
+.nav-btn {
+  @apply px-3 py-1.5 rounded-lg transition-all duration-200 font-medium;
+}
+
+.nav-btn-active {
+  @apply bg-white text-blue-600 shadow-sm;
+}
+
+@media (max-width: 640px) {
+  .nav-btn span {
+    @apply hidden;
+  }
+
+  .nav-btn {
+    @apply px-2 py-1;
+  }
+}
+
+@media (min-width: 641px) and (max-width: 768px) {
+  .nav-btn {
+    @apply text-xs;
+  }
 }
