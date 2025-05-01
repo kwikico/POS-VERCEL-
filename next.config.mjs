@@ -18,14 +18,13 @@ const nextConfig = {
     unoptimized: true,
   },
   // Production optimization settings
-  swcMinify: true,
   compiler: {
     removeConsole: process.env.NODE_ENV === 'production' ? {
       exclude: ['error', 'warn'],
     } : false,
   },
   experimental: {
-    serverActions: true,
+    serverActions: {},
   },
   // Added poweredByHeader setting for security
   poweredByHeader: false,
