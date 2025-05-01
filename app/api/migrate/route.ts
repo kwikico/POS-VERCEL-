@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server"
-import { supabase } from "@/lib/supabase"
+import { getServerSupabase } from "@/lib/supabase"
 
 export async function GET() {
   try {
+    // Use the server-side Supabase client for migrations
+    const supabase = getServerSupabase()
+
     // Create products table if it doesn't exist
     await supabase.rpc("execute_sql", {
       sql_query: `

@@ -2,8 +2,8 @@
 
 import type React from "react"
 
-import { useState, useRef, useEffect } from "react"
-import { Search, Plus, ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
+import { useState, useRef, useEffect, useMemo } from "react"
+import { Search, ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -36,6 +36,7 @@ export default function ProductCatalog({
   const searchInputRef = useRef<HTMLInputElement>(null)
   const productsPerPage = 12
   const barcodeRegex = /^\d{8,14}$/ // Basic barcode format validation
+  const [isSearching, setIsSearching] = useState(false)
 
   // Focus the search input field on component mount
   useEffect(() => {
@@ -62,13 +63,29 @@ export default function ProductCatalog({
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [showNotFoundDialog])
 
-  // Filter products based on search query
-  const filteredProducts = products.filter((product) => {
-    const matchesSearch =
-      product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (product.barcode && product.barcode.includes(searchQuery.toLowerCase()))
-    return matchesSearch
-  })
+  // Add keyboard shortcut to focus search input
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Focus search input when "/" key is pressed and no input is focused
+      if (e.key === "/" && document.activeElement?.tagName !== "INPUT") {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [])
+
+  // Filter products based on search query with memoization for performance
+  const filteredProducts = useMemo(() => {
+    return products.filter((product) => {
+      const matchesSearch =
+        product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (product.barcode && product.barcode.includes(searchQuery.toLowerCase()))
+      return matchesSearch
+    })
+  }, [products, searchQuery])
 
   // Calculate pagination
   const indexOfLastProduct = currentPage * productsPerPage
@@ -112,27 +129,33 @@ export default function ProductCatalog({
   }
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value
-    setSearchQuery(value)
+    try {
+      const value = e.target.value
+      setSearchQuery(value)
 
-    // If input looks like a complete barcode and ends with Enter key character
-    if (barcodeRegex.test(value.trim()) && value.includes("\n")) {
-      // Remove the Enter key character
-      const cleanBarcode = value.trim().replace(/\n/g, "")
-      setSearchQuery(cleanBarcode)
+      // If input looks like a complete barcode and ends with Enter key character
+      if (barcodeRegex.test(value.trim()) && value.includes("\n")) {
+        // Remove the Enter key character
+        const cleanBarcode = value.trim().replace(/\n/g, "")
+        setSearchQuery(cleanBarcode)
 
-      // Find product by barcode
-      const product = products.find((p) => p.barcode === cleanBarcode)
+        // Find product by barcode
+        const product = products.find((p) => p.barcode === cleanBarcode)
 
-      if (product) {
-        // Product found, add to cart
-        onAddToCart(product)
-        setSearchQuery("")
-      } else {
-        // Product not found, show dialog
-        setScannedBarcode(cleanBarcode)
-        setShowNotFoundDialog(true)
+        if (product) {
+          // Product found, add to cart
+          onAddToCart(product)
+          setSearchQuery("")
+        } else {
+          // Product not found, show dialog
+          setScannedBarcode(cleanBarcode)
+          setShowNotFoundDialog(true)
+        }
       }
+    } catch (error) {
+      console.error("Error processing search input:", error)
+      // Fallback behavior
+      setSearchQuery(e.target.value)
     }
   }
 
@@ -178,22 +201,32 @@ export default function ProductCatalog({
       <CardContent className="p-4 space-y-4">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold">Products</h2>
-          <Button onClick={onOpenManualEntry} variant="outline" size="sm">
-            <Plus className="h-4 w-4 mr-2" />
-            Manual Entry
-          </Button>
         </div>
 
-        <form onSubmit={handleSearchSubmit} className="relative">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-500" />
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            setIsSearching(true)
+            try {
+              handleSearchSubmit(e)
+            } finally {
+              setIsSearching(false)
+            }
+          }}
+          className="relative"
+        >
+          <Search
+            className={`absolute left-2.5 top-2.5 h-4 w-4 ${isSearching ? "text-blue-600 animate-pulse" : "text-blue-500"}`}
+          />
           <Input
             ref={searchInputRef}
             type="search"
-            placeholder="Search products or scan barcode..."
-            className="pl-8 border-slate-300 focus:border-slate-400 focus:ring-slate-400"
+            placeholder="Search products or scan barcode... (Press '/' to focus)"
+            className="pl-8 border-slate-300 focus:border-slate-400 focus:ring-slate-400 focus:ring-2 rounded-lg shadow-sm hover:shadow transition-shadow bg-slate-50/50 hover:bg-white text-slate-900 placeholder:text-slate-500"
             value={searchQuery}
             onChange={handleSearchChange}
             autoComplete="off"
+            aria-label="Search products"
           />
         </form>
 
