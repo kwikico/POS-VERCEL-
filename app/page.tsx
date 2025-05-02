@@ -1,6 +1,8 @@
 "use client"
 
-import { useState, useCallback, useRef } from "react"
+import type React from "react"
+
+import { useState, useCallback, useRef, useEffect } from "react"
 import NavigationBar from "@/components/navigation-bar"
 import ContentContainer from "@/components/content-container"
 import ProductCatalog from "@/components/product-catalog"
@@ -18,6 +20,8 @@ import { useProducts } from "@/hooks/use-products"
 import { useTransactionsData } from "@/hooks/use-transactions-data"
 import { useKeyboardShortcut } from "@/hooks/use-keyboard-shortcut"
 import { TOAST_DURATION } from "@/lib/constants"
+import { ErrorBoundary } from "@/components/error-boundary"
+import { getProductByBarcode } from "@/services/product-service"
 import type { Product } from "@/types/pos-types"
 
 export default function POSSystem() {
@@ -29,6 +33,9 @@ export default function POSSystem() {
 
   // Ref to track if we're in the process of handling a not-found barcode
   const processingBarcodeRef = useRef(false)
+
+  // Store the barcode in a ref to ensure it's always current in callbacks
+  const currentBarcodeRef = useRef("")
 
   // Use our custom hooks
   const { products, isLoading: productsLoading, updateProducts } = useProducts()
@@ -48,6 +55,11 @@ export default function POSSystem() {
     completeTransaction,
     resetTransaction,
   } = useTransaction()
+
+  // Update the ref when scannedBarcode changes
+  useEffect(() => {
+    currentBarcodeRef.current = scannedBarcode
+  }, [scannedBarcode])
 
   // Handle keyboard shortcuts for global app actions
   useKeyboardShortcut(
@@ -183,10 +195,18 @@ export default function POSSystem() {
     setActiveTab("pos")
   }, [resetTransaction])
 
-  // Handle barcode scanning
+  // Check if a product with the given barcode already exists in the inventory
+  const findProductByBarcode = useCallback(
+    (barcode: string): Product | undefined => {
+      return products.find((product) => product.barcode === barcode)
+    },
+    [products],
+  )
+
+  // Handle barcode scanning - UPDATED to prevent duplicate entries
   const handleBarcodeSubmit = useCallback(
-    (barcode: string) => {
-      console.log("Barcode scanned:", barcode) // Debug log
+    async (barcode: string) => {
+      console.log("Barcode scanned:", barcode)
 
       // Prevent processing if we're already handling a barcode
       if (processingBarcodeRef.current) {
@@ -194,58 +214,130 @@ export default function POSSystem() {
         return
       }
 
-      // Search for product with matching barcode
-      const product = products.find((p) => p.barcode === barcode)
+      // Set processing flag
+      processingBarcodeRef.current = true
 
-      if (product) {
-        console.log("Product found:", product) // Debug log
-        // If product found, add to cart
-        handleAddToCart(product)
+      try {
+        // First, check if the product already exists in our local inventory
+        const existingProduct = findProductByBarcode(barcode)
 
-        // Show success toast
+        if (existingProduct) {
+          console.log("Product found in local inventory:", existingProduct)
+
+          // If product found in local inventory, add to cart directly
+          handleAddToCart(existingProduct)
+
+          // Reset processing flag
+          processingBarcodeRef.current = false
+          return
+        }
+
+        // If not found locally, search using the service
+        const { data: product, error } = await getProductByBarcode(barcode)
+
+        if (error) {
+          toast({
+            title: "Error",
+            description: error.message,
+            variant: "destructive",
+            duration: TOAST_DURATION,
+          })
+          processingBarcodeRef.current = false
+          return
+        }
+
+        if (product) {
+          console.log("Product found in database:", product)
+          // If product found in database, add to cart
+          handleAddToCart(product)
+
+          // Show success toast
+          toast({
+            title: "Product scanned",
+            description: `${product.name} added to cart`,
+            duration: TOAST_DURATION,
+          })
+
+          // Reset processing flag
+          processingBarcodeRef.current = false
+        } else {
+          console.log("Product not found for barcode:", barcode)
+
+          // If product not found, show modal and store the barcode
+          setScannedBarcode(barcode)
+          console.log("Setting scanned barcode state:", barcode)
+
+          // Ensure the modal is opened
+          setIsProductNotFoundOpen(true)
+          console.log("Opening product not found modal")
+          // Keep processing flag true until modal is handled
+        }
+      } catch (error) {
+        console.error("Error processing barcode:", error)
         toast({
-          title: "Product scanned",
-          description: `${product.name} added to cart`,
+          title: "Error",
+          description: "Failed to process barcode",
+          variant: "destructive",
           duration: TOAST_DURATION,
         })
-      } else {
-        console.log("Product not found for barcode:", barcode) // Debug log
-
-        // Set processing flag
-        processingBarcodeRef.current = true
-
-        // If product not found, show modal and store the barcode
-        setScannedBarcode(barcode)
-        console.log("Setting scanned barcode state:", barcode)
-
-        // Ensure the modal is opened
-        setIsProductNotFoundOpen(true)
-        console.log("Opening product not found modal")
+        processingBarcodeRef.current = false
       }
     },
-    [products, handleAddToCart],
+    [handleAddToCart, findProductByBarcode],
   )
 
-  // Handle "Yes" on product not found modal
-  const handleAddNewProduct = useCallback(() => {
-    console.log("Adding new product for barcode:", scannedBarcode) // Debug log
+  // Handle adding a new product from the ProductNotFoundModal - UPDATED to add to cart
+  const handleAddNewProduct = useCallback(
+    (productData: {
+      name: string
+      price: number
+      category: string
+      barcode: string
+      quantity: number
+      quickAdd: boolean
+    }) => {
+      console.log("Adding new product:", productData)
 
-    // First close the product not found modal
-    setIsProductNotFoundOpen(false)
+      // Create a new product
+      const newProduct: Product = {
+        id: `p-${Date.now()}`,
+        name: productData.name,
+        price: productData.price,
+        category: productData.category,
+        imageUrl: "/placeholder.svg?height=100&width=100",
+        barcode: productData.barcode,
+        stock: productData.quantity,
+        quickAdd: productData.quickAdd,
+      }
 
-    // Then open the manual entry modal with the scanned barcode
-    // Use setTimeout to ensure state updates properly
-    setTimeout(() => {
-      setIsManualEntryOpen(true)
-      console.log("Manual entry opened with barcode:", scannedBarcode)
-    }, 100)
-  }, [scannedBarcode])
+      // Add the product to the inventory
+      updateProducts([...products, newProduct])
+
+      // Add the product to the cart
+      addToCart(newProduct)
+
+      // Reset processing state
+      processingBarcodeRef.current = false
+
+      // Close the modal
+      setIsProductNotFoundOpen(false)
+      setScannedBarcode("")
+
+      // Show success toast
+      toast({
+        title: "Product added",
+        description: `${newProduct.name} has been added to inventory and cart`,
+        duration: TOAST_DURATION,
+      })
+    },
+    [products, updateProducts, addToCart],
+  )
 
   // Handle "No" on product not found modal
   const handleCloseProductNotFound = useCallback(() => {
-    console.log("ProductNotFoundModal closed via No button")
+    console.log("ProductNotFoundModal closed")
     setIsProductNotFoundOpen(false)
-    setScannedBarcode("") // Clear the barcode when closing with "No"
+    setScannedBarcode("") // Clear the barcode when closing
 
     // Reset processing flag
     processingBarcodeRef.current = false
@@ -262,64 +354,106 @@ export default function POSSystem() {
     processingBarcodeRef.current = false
   }, [])
 
+  // Error handler for error boundaries
+  const handleError = useCallback((error: Error, info: React.ErrorInfo) => {
+    console.error("Error caught by ErrorBoundary:", error, info)
+    toast({
+      title: "Error",
+      description: "An error occurred. Some functionality may be limited.",
+      variant: "destructive",
+    })
+  }, [])
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <NavigationBar
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        onNewTransaction={handleStartNewTransaction}
-        hasReceipt={!!receipt}
-      />
+      <ErrorBoundary onError={handleError}>
+        <NavigationBar
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          onNewTransaction={handleStartNewTransaction}
+          hasReceipt={!!receipt}
+        />
 
-      <main className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8 space-y-6">
-        <ContentContainer isActive={activeTab === "pos"}>
-          {/* Barcode Scanner - only show on POS tab */}
-          <div className="mb-4">
-            <BarcodeInput
-              onBarcodeSubmit={handleBarcodeSubmit}
-              isActive={activeTab === "pos" && !isProductNotFoundOpen && !isManualEntryOpen}
-            />
-          </div>
-
-          <div className="flex flex-col md:flex-row gap-4">
-            {/* Shopping Cart - 40% width */}
-            <div className="md:w-[40%]">
-              <ShoppingCart
-                cart={cart}
-                onUpdateQuantity={updateQuantity}
-                onRemoveItem={removeFromCart}
-                onClearCart={clearCart}
-                onCheckout={handleCompleteTransaction}
-                onOpenManualEntry={openManualEntry}
-                taxEnabled={taxEnabled}
-                onTaxToggle={toggleTax}
-                discount={discount}
-                onApplyDiscount={applyDiscount}
-                onRemoveDiscount={removeDiscount}
+        <main className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8 space-y-6">
+          <ContentContainer isActive={activeTab === "pos"}>
+            {/* Barcode Scanner - only show on POS tab */}
+            <div className="mb-4">
+              <BarcodeInput
+                onBarcodeSubmit={handleBarcodeSubmit}
+                isActive={activeTab === "pos" && !isProductNotFoundOpen && !isManualEntryOpen}
               />
             </div>
 
-            {/* Product Catalog - 60% width */}
-            <div className="md:w-[60%]">
-              <ProductCatalog products={products} onAddToCart={handleAddToCart} isLoading={productsLoading} />
+            <div className="flex flex-col md:flex-row gap-4">
+              {/* Shopping Cart - 40% width */}
+              <div className="md:w-[40%]">
+                <ErrorBoundary
+                  onError={handleError}
+                  fallback={
+                    <div className="bg-red-50 p-4 rounded-md border border-red-200 h-full">
+                      <h3 className="text-red-600 font-medium mb-2">Cart Error</h3>
+                      <p className="text-sm text-slate-700">
+                        There was a problem loading the shopping cart. Try refreshing the page.
+                      </p>
+                    </div>
+                  }
+                >
+                  <ShoppingCart
+                    cart={cart}
+                    onUpdateQuantity={updateQuantity}
+                    onRemoveItem={removeFromCart}
+                    onClearCart={clearCart}
+                    onCheckout={handleCompleteTransaction}
+                    onOpenManualEntry={openManualEntry}
+                    taxEnabled={taxEnabled}
+                    onTaxToggle={toggleTax}
+                    discount={discount}
+                    onApplyDiscount={applyDiscount}
+                    onRemoveDiscount={removeDiscount}
+                  />
+                </ErrorBoundary>
+              </div>
+
+              {/* Product Catalog - 60% width */}
+              <div className="md:w-[60%]">
+                <ErrorBoundary
+                  onError={handleError}
+                  fallback={
+                    <div className="bg-red-50 p-4 rounded-md border border-red-200 h-full">
+                      <h3 className="text-red-600 font-medium mb-2">Product Catalog Error</h3>
+                      <p className="text-sm text-slate-700">
+                        There was a problem loading the product catalog. Try refreshing the page.
+                      </p>
+                    </div>
+                  }
+                >
+                  <ProductCatalog products={products} onAddToCart={handleAddToCart} isLoading={productsLoading} />
+                </ErrorBoundary>
+              </div>
             </div>
-          </div>
-        </ContentContainer>
+          </ContentContainer>
 
-        <ContentContainer isActive={activeTab === "reports"}>
-          <Reports transactions={transactions} />
-        </ContentContainer>
+          <ContentContainer isActive={activeTab === "reports"}>
+            <ErrorBoundary onError={handleError}>
+              <Reports transactions={transactions} />
+            </ErrorBoundary>
+          </ContentContainer>
 
-        <ContentContainer isActive={activeTab === "inventory"}>
-          <InventoryManagement products={products} onProductsChange={updateProducts} />
-        </ContentContainer>
+          <ContentContainer isActive={activeTab === "inventory"}>
+            <ErrorBoundary onError={handleError}>
+              <InventoryManagement products={products} onProductsChange={updateProducts} />
+            </ErrorBoundary>
+          </ContentContainer>
 
-        <ContentContainer isActive={activeTab === "receipt"}>
-          {receipt && <Receipt receipt={receipt} onStartNewTransaction={handleStartNewTransaction} />}
-        </ContentContainer>
-      </main>
+          <ContentContainer isActive={activeTab === "receipt"}>
+            <ErrorBoundary onError={handleError}>
+              {receipt && <Receipt receipt={receipt} onStartNewTransaction={handleStartNewTransaction} />}
+            </ErrorBoundary>
+          </ContentContainer>
+        </main>
+      </ErrorBoundary>
 
-      {/* Product Not Found Modal - Render conditionally to ensure it's properly controlled */}
+      {/* Product Not Found Modal */}
       <ProductNotFoundModal
         isOpen={isProductNotFoundOpen}
         barcode={scannedBarcode}

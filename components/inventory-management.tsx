@@ -1,6 +1,8 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect } from "react"
+
+import { useState, useRef } from "react"
 import { Plus, Pencil, Trash2, Save, X, Tag, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -14,6 +16,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Separator } from "@/components/ui/separator"
 import { toast } from "@/components/ui/use-toast"
 import { deleteProduct } from "@/services/product-service"
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
+import { useFocusTrap } from "@/hooks/use-focus-trap"
 import type { Product } from "@/types/pos-types"
 
 interface InventoryManagementProps {
@@ -28,6 +32,15 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedCategory, setSelectedCategory] = useState<string>("all")
   const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [productToDelete, setProductToDelete] = useState<string | null>(null)
+  const [productToDeleteName, setProductToDeleteName] = useState<string>("")
+
+  // Use our focus trap hook for the product dialog
+  const productDialogRef = useFocusTrap(isAddProductOpen)
+
+  // Ref for the product name input to focus when dialog opens
+  const productNameInputRef = useRef<HTMLInputElement>(null)
 
   // New product form state
   const [newProduct, setNewProduct] = useState<{
@@ -53,6 +66,15 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
     quickAdd: false,
     customPrice: false,
   })
+
+  // Focus the product name input when the dialog opens
+  useEffect(() => {
+    if (isAddProductOpen && productNameInputRef.current) {
+      setTimeout(() => {
+        productNameInputRef.current?.focus()
+      }, 100)
+    }
+  }, [isAddProductOpen])
 
   // Get unique categories from products
   const categories = Array.from(new Set(products.map((p) => p.category)))
@@ -160,33 +182,45 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
     setIsAddProductOpen(true)
   }
 
-  const handleDeleteProduct = async (productId: string) => {
-    if (confirm("Are you sure you want to delete this product?")) {
-      setIsDeleting(true)
-      try {
-        // Delete from Supabase
-        const success = await deleteProduct(productId)
+  const handleDeleteClick = (productId: string, productName: string) => {
+    setProductToDelete(productId)
+    setProductToDeleteName(productName)
+    setDeleteConfirmOpen(true)
+  }
 
-        if (success) {
-          // Update local state
-          onProductsChange(products.filter((p) => p.id !== productId))
-          toast({
-            title: "Product Deleted",
-            description: "The product has been removed from inventory.",
-          })
-        } else {
-          throw new Error("Failed to delete product")
-        }
-      } catch (error) {
-        console.error("Error deleting product:", error)
-        toast({
-          title: "Error",
-          description: "Failed to delete product. Please try again.",
-          variant: "destructive",
-        })
-      } finally {
-        setIsDeleting(false)
+  const handleDeleteConfirm = async () => {
+    if (!productToDelete) return
+
+    setIsDeleting(true)
+    try {
+      // Delete from Supabase
+      const { data: success, error } = await deleteProduct(productToDelete)
+
+      if (error) {
+        throw new Error(error.message)
       }
+
+      if (success) {
+        // Update local state
+        onProductsChange(products.filter((p) => p.id !== productToDelete))
+        toast({
+          title: "Product Deleted",
+          description: "The product has been removed from inventory.",
+        })
+      } else {
+        throw new Error("Failed to delete product")
+      }
+    } catch (error) {
+      console.error("Error deleting product:", error)
+      toast({
+        title: "Error",
+        description: "Failed to delete product. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeleting(false)
+      setProductToDelete(null)
+      setProductToDeleteName("")
     }
   }
 
@@ -202,6 +236,7 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
               setIsAddProductOpen(true)
             }}
             className="bg-emerald-600 hover:bg-emerald-700"
+            aria-label="Add new product"
           >
             <Plus className="mr-2 h-4 w-4" /> Add Product
           </Button>
@@ -229,18 +264,21 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="max-w-sm border-slate-300 focus:border-slate-400 focus:ring-slate-400"
+                aria-label="Search products by name or barcode"
               />
               <Select value={selectedCategory} onValueChange={setSelectedCategory}>
-                <SelectTrigger className="w-[180px] border-slate-300">
+                <SelectTrigger className="w-[180px] border-slate-300" aria-label="Filter by category">
                   <SelectValue placeholder="Category" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Categories</SelectItem>
-                  {categories.map((category) => (
-                    <SelectItem key={category} value={category}>
-                      {category}
-                    </SelectItem>
-                  ))}
+                  {categories
+                    .filter((category) => category !== "")
+                    .map((category) => (
+                      <SelectItem key={category} value={category}>
+                        {category}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -263,14 +301,17 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                           <div className="w-10 h-10 rounded-md bg-slate-100 overflow-hidden border border-slate-200">
                             <img
                               src={product.imageUrl || "/placeholder.svg"}
-                              alt={product.name}
-                              className="w-full h-full object-cover"
+                              alt={`${product.name} product image`}
+                              className="w-full h-full object-contain"
+                              loading="lazy"
                             />
                           </div>
                         </div>
                         <div className="col-span-3">
                           <div className="font-medium">{product.name}</div>
-                          {product.barcode && <div className="text-xs text-slate-500">SKU: {product.barcode}</div>}
+                          {product.barcode && (
+                            <div className="text-xs text-slate-700 font-mono">SKU: {product.barcode}</div>
+                          )}
                         </div>
                         <div className="col-span-1">
                           {product.category === "custom-price" ? (
@@ -307,6 +348,7 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                             size="icon"
                             className="hover:bg-slate-100 text-slate-700"
                             onClick={() => handleEditProduct(product)}
+                            aria-label={`Edit ${product.name}`}
                           >
                             <Pencil className="h-4 w-4" />
                           </Button>
@@ -314,16 +356,21 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                             variant="ghost"
                             size="icon"
                             className="text-red-500 hover:bg-red-50"
-                            onClick={() => handleDeleteProduct(product.id)}
+                            onClick={() => handleDeleteClick(product.id, product.name)}
                             disabled={isDeleting}
+                            aria-label={`Delete ${product.name}`}
                           >
-                            {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            {isDeleting && productToDelete === product.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
                           </Button>
                         </div>
                       </div>
                     ))
                   ) : (
-                    <div className="p-4 text-center text-slate-500">
+                    <div className="p-4 text-center text-slate-500" aria-live="polite">
                       No products found. Add some products to get started.
                     </div>
                   )}
@@ -333,22 +380,24 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
 
             <TabsContent value="categories">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {categories.map((category) => {
-                  const categoryProducts = products.filter((p) => p.category === category)
-                  return (
-                    <Card
-                      key={category}
-                      className="border border-slate-200 shadow-sm hover:shadow-md transition-shadow"
-                    >
-                      <CardHeader className="pb-2 bg-slate-50 border-b border-slate-200">
-                        <CardTitle className="text-lg">{category}</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <p className="text-sm text-slate-500">{categoryProducts.length} products</p>
-                      </CardContent>
-                    </Card>
-                  )
-                })}
+                {categories
+                  .filter((category) => category !== "")
+                  .map((category) => {
+                    const categoryProducts = products.filter((p) => p.category === category)
+                    return (
+                      <Card
+                        key={category}
+                        className="border border-slate-200 shadow-sm hover:shadow-md transition-shadow"
+                      >
+                        <CardHeader className="pb-2 bg-slate-50 border-b border-slate-200">
+                          <CardTitle className="text-lg">{category}</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <p className="text-sm text-slate-500">{categoryProducts.length} products</p>
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
               </div>
             </TabsContent>
           </Tabs>
@@ -356,8 +405,30 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
       </Card>
 
       {/* Add/Edit Product Dialog */}
-      <Dialog open={isAddProductOpen} onOpenChange={setIsAddProductOpen}>
-        <DialogContent className="sm:max-w-[600px]">
+      <Dialog
+        open={isAddProductOpen}
+        onOpenChange={(open) => {
+          if (!open) setIsAddProductOpen(false)
+        }}
+      >
+        <DialogContent
+          className="sm:max-w-[600px]"
+          aria-describedby="product-form-desc"
+          ref={productDialogRef}
+          onEscapeKeyDown={(e) => {
+            // Prevent automatic closing with Escape key
+            e.preventDefault()
+          }}
+          onPointerDownOutside={(e) => {
+            // Prevent automatic closing when clicking outside
+            e.preventDefault()
+          }}
+        >
+          {/* Add a screen reader only description */}
+          <p id="product-form-desc" className="sr-only">
+            Use this form to {editingProduct ? "edit an existing" : "add a new"} product to inventory. Fill in the
+            required fields marked with an asterisk and press Save when done.
+          </p>
           <DialogHeader>
             <DialogTitle>{editingProduct ? "Edit Product" : "Add New Product"}</DialogTitle>
           </DialogHeader>
@@ -372,6 +443,8 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                   placeholder="Product name"
                   className="border-slate-300 focus:border-slate-400 focus:ring-slate-400"
                   required
+                  ref={productNameInputRef}
+                  aria-required="true"
                 />
               </div>
               <div className="space-y-2">
@@ -386,6 +459,8 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                   placeholder="0.00"
                   disabled={newProduct.customPrice}
                   required
+                  aria-required="true"
+                  aria-disabled={newProduct.customPrice}
                 />
               </div>
             </div>
@@ -394,19 +469,22 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
               <div className="space-y-2">
                 <Label htmlFor="category">Category</Label>
                 <Select
-                  value={newProduct.category}
+                  value={newProduct.category || "default-category"}
                   onValueChange={(value) => setNewProduct({ ...newProduct, category: value })}
                   disabled={newProduct.customPrice}
                 >
-                  <SelectTrigger id="category">
+                  <SelectTrigger id="category" aria-disabled={newProduct.customPrice}>
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
                   <SelectContent>
-                    {categories.map((category) => (
-                      <SelectItem key={category} value={category}>
-                        {category}
-                      </SelectItem>
-                    ))}
+                    <SelectItem value="default-category">Select a category</SelectItem>
+                    {categories
+                      .filter((category) => category !== "")
+                      .map((category) => (
+                        <SelectItem key={category} value={category}>
+                          {category}
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -418,6 +496,7 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                   onChange={(e) => setNewProduct({ ...newProduct, newCategory: e.target.value })}
                   placeholder="New category name"
                   disabled={newProduct.customPrice}
+                  aria-disabled={newProduct.customPrice}
                 />
               </div>
             </div>
@@ -430,6 +509,7 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                   value={newProduct.barcode}
                   onChange={(e) => setNewProduct({ ...newProduct, barcode: e.target.value })}
                   placeholder="Barcode or SKU"
+                  aria-label="Barcode or SKU (optional)"
                 />
               </div>
               <div className="space-y-2">
@@ -439,19 +519,25 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                   value={newProduct.imageUrl}
                   onChange={(e) => setNewProduct({ ...newProduct, imageUrl: e.target.value })}
                   placeholder="https://example.com/image.jpg"
+                  aria-label="Image URL (optional)"
                 />
               </div>
             </div>
 
             <div className="space-y-2">
               <Label>Tags</Label>
-              <div className="flex flex-wrap gap-2 mb-2">
+              <div className="flex flex-wrap gap-2 mb-2" aria-label="Current tags">
                 {newProduct.tags.map((tag) => (
                   <Badge key={tag} variant="secondary" className="flex items-center gap-1">
                     {tag}
-                    <X className="h-3 w-3 cursor-pointer" onClick={() => handleRemoveTag(tag)} />
+                    <X
+                      className="h-3 w-3 cursor-pointer"
+                      onClick={() => handleRemoveTag(tag)}
+                      aria-label={`Remove ${tag} tag`}
+                    />
                   </Badge>
                 ))}
+                {newProduct.tags.length === 0 && <span className="text-xs text-slate-500">No tags added yet</span>}
               </div>
               <div className="flex gap-2">
                 <Input
@@ -464,8 +550,9 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                       handleAddTag()
                     }
                   }}
+                  aria-label="Enter tag name"
                 />
-                <Button type="button" onClick={handleAddTag} size="sm">
+                <Button type="button" onClick={handleAddTag} size="sm" aria-label="Add tag">
                   <Tag className="h-4 w-4 mr-1" /> Add
                 </Button>
               </div>
@@ -479,6 +566,7 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                   id="quickAdd"
                   checked={newProduct.quickAdd}
                   onCheckedChange={(checked) => setNewProduct({ ...newProduct, quickAdd: checked })}
+                  aria-label="Add to Quick Access buttons"
                 />
                 <Label htmlFor="quickAdd">Quick Add Product</Label>
               </div>
@@ -493,22 +581,44 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                       price: checked ? "0" : newProduct.price,
                     })
                   }
+                  aria-label="Set as custom price product"
                 />
                 <Label htmlFor="customPrice">Custom Price Product</Label>
               </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsAddProductOpen(false)}>
+            <Button variant="outline" onClick={() => setIsAddProductOpen(false)} aria-label="Cancel and close dialog">
               Cancel
             </Button>
-            <Button onClick={handleSaveProduct} className="bg-emerald-600 hover:bg-emerald-700">
+            <Button
+              onClick={handleSaveProduct}
+              className="bg-emerald-600 hover:bg-emerald-700"
+              aria-label={editingProduct ? "Update product" : "Save new product"}
+            >
               <Save className="mr-2 h-4 w-4" />
               {editingProduct ? "Update Product" : "Save Product"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Confirmation Dialog for Delete */}
+      <ConfirmationDialog
+        isOpen={deleteConfirmOpen}
+        onClose={() => {
+          setDeleteConfirmOpen(false)
+          setProductToDelete(null)
+          setProductToDeleteName("")
+        }}
+        onConfirm={handleDeleteConfirm}
+        title="Delete Product"
+        description={`Are you sure you want to delete "${productToDeleteName}"? This action cannot be undone.`}
+        confirmText="Delete Product"
+        cancelText="Cancel"
+        variant="danger"
+        isLoading={isDeleting}
+      />
     </div>
   )
 }

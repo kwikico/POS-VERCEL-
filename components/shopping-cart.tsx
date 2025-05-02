@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, memo, useCallback } from "react"
+import { useState, memo, useCallback, useMemo } from "react"
 import {
   ShoppingCartIcon as CartIcon,
   CreditCard,
@@ -11,6 +11,7 @@ import {
   ToggleRight,
   Tag,
   Trash2,
+  Loader2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -51,23 +52,34 @@ function ShoppingCartComponent({
 }: ShoppingCartProps) {
   const [transactionType, setTransactionType] = useState<"sale" | "return">("sale")
   const [isDiscountOpen, setIsDiscountOpen] = useState<boolean>(false)
+  const [isProcessing, setIsProcessing] = useState<boolean>(false)
 
-  // Calculate cart totals
-  const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0)
+  // Calculate cart totals with memoization
+  const cartTotals = useMemo(() => {
+    const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0)
 
-  // Calculate discount amount
-  const discountAmount = discount
-    ? discount.type === "percentage"
-      ? (subtotal * discount.value) / 100
-      : discount.value
-    : 0
+    // Calculate discount amount
+    const discountAmount = discount
+      ? discount.type === "percentage"
+        ? (subtotal * discount.value) / 100
+        : discount.value
+      : 0
 
-  // Calculate subtotal after discount
-  const subtotalAfterDiscount = Math.max(0, subtotal - discountAmount)
+    // Calculate subtotal after discount
+    const subtotalAfterDiscount = Math.max(0, subtotal - discountAmount)
 
-  // Calculate tax only if enabled
-  const tax = taxEnabled ? subtotalAfterDiscount * TAX_RATE : 0
-  const total = subtotalAfterDiscount + tax
+    // Calculate tax only if enabled
+    const tax = taxEnabled ? subtotalAfterDiscount * TAX_RATE : 0
+    const total = subtotalAfterDiscount + tax
+
+    return {
+      subtotal,
+      discountAmount,
+      subtotalAfterDiscount,
+      tax,
+      total,
+    }
+  }, [cart, discount, taxEnabled])
 
   // Handle keyboard shortcuts
   useKeyboardShortcut(
@@ -88,12 +100,17 @@ function ShoppingCartComponent({
 
   // Handle checkout with specified payment method
   const handleCheckout = useCallback(
-    (paymentMethod: string) => {
-      if (cart.length > 0) {
-        onCheckout(paymentMethod, transactionType === "return")
+    async (paymentMethod: string) => {
+      if (cart.length > 0 && !isProcessing) {
+        setIsProcessing(true)
+        try {
+          await onCheckout(paymentMethod, transactionType === "return")
+        } finally {
+          setIsProcessing(false)
+        }
       }
     },
-    [cart.length, onCheckout, transactionType],
+    [cart.length, onCheckout, transactionType, isProcessing],
   )
 
   // Handle discount application
@@ -213,34 +230,42 @@ function ShoppingCartComponent({
         {/* Totals and checkout */}
         <div className="mt-auto">
           <CartSummary
-            subtotal={subtotal}
+            subtotal={cartTotals.subtotal}
             discount={discount}
-            discountAmount={discountAmount}
+            discountAmount={cartTotals.discountAmount}
             taxEnabled={taxEnabled}
-            tax={tax}
-            total={total}
+            tax={cartTotals.tax}
+            total={cartTotals.total}
           />
 
           <div className="grid grid-cols-2 gap-2">
             <Button
               onClick={() => handleCheckout("card")}
-              disabled={cart.length === 0}
+              disabled={cart.length === 0 || isProcessing}
               className={
                 transactionType === "return" ? "bg-amber-600 hover:bg-amber-700" : "bg-emerald-600 hover:bg-emerald-700"
               }
             >
-              <CreditCard className="mr-2 h-4 w-4" />
+              {isProcessing ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <CreditCard className="mr-2 h-4 w-4" />
+              )}
               {transactionType === "sale" ? "Card" : "Return Card"}
               <span className="ml-1 text-xs opacity-75">(P)</span>
             </Button>
             <Button
               onClick={() => handleCheckout("cash")}
-              disabled={cart.length === 0}
+              disabled={cart.length === 0 || isProcessing}
               className={
                 transactionType === "return" ? "bg-amber-600 hover:bg-amber-700" : "bg-emerald-600 hover:bg-emerald-700"
               }
             >
-              <DollarSign className="mr-2 h-4 w-4" />
+              {isProcessing ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <DollarSign className="mr-2 h-4 w-4" />
+              )}
               {transactionType === "sale" ? "Cash" : "Return Cash"}
               <span className="ml-1 text-xs opacity-75">(O)</span>
             </Button>

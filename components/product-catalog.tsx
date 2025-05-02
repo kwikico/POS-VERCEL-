@@ -1,13 +1,15 @@
 "use client"
 
 import { useState, useMemo, memo, useEffect } from "react"
-import { Search, ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
+import { Search, ChevronLeft, ChevronRight } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import ProductCard from "@/components/product-catalog/product-card"
 import type { Product } from "@/types/pos-types"
 import { QuickAccessButton } from "@/components/quick-access-button"
+import { useInView } from "react-intersection-observer"
+import { LoadingState } from "@/components/ui/loading-state"
 
 interface ProductCatalogProps {
   products: Product[]
@@ -32,7 +34,7 @@ function ProductCatalogComponent({ products, onAddToCart, isLoading = false }: P
   const [searchQuery, setSearchQuery] = useState("")
   const [currentPage, setCurrentPage] = useState(1)
 
-  // Filter products based on search query - memoized
+  // Filter products based on search query - memoized with proper dependencies
   const filteredProducts = useMemo(() => {
     if (!searchQuery.trim()) return products
 
@@ -73,14 +75,18 @@ function ProductCatalogComponent({ products, onAddToCart, isLoading = false }: P
     setCurrentPage(1)
   }, [searchQuery])
 
+  // Set up intersection observer for lazy loading
+  const { ref: productGridRef, inView } = useInView({
+    triggerOnce: false,
+    rootMargin: "200px 0px",
+    threshold: 0.1,
+  })
+
   if (isLoading) {
     return (
       <Card className="bg-white shadow-md border border-slate-200 h-full">
         <CardContent className="p-4 flex items-center justify-center h-full">
-          <div className="text-center">
-            <Loader2 className="h-8 w-8 animate-spin mx-auto text-slate-400" />
-            <p className="mt-2 text-slate-500">Loading products...</p>
-          </div>
+          <LoadingState text="Loading products..." size="md" />
         </CardContent>
       </Card>
     )
@@ -122,12 +128,22 @@ function ProductCatalogComponent({ products, onAddToCart, isLoading = false }: P
           </div>
         </div>
 
-        <div className="grid grid-cols-6 gap-3">
-          {currentProducts.length > 0 ? (
-            currentProducts.map((product) => <ProductCard key={product.id} product={product} onClick={onAddToCart} />)
+        <div ref={productGridRef}>
+          {inView ? (
+            <div className="grid grid-cols-6 gap-3">
+              {currentProducts.length > 0 ? (
+                currentProducts.map((product) => (
+                  <ProductCard key={product.id} product={product} onClick={onAddToCart} />
+                ))
+              ) : (
+                <div className="col-span-full text-center py-8 text-slate-500">
+                  {searchQuery ? `No products found matching "${searchQuery}"` : "No products available"}
+                </div>
+              )}
+            </div>
           ) : (
-            <div className="col-span-full text-center py-8 text-slate-500">
-              {searchQuery ? `No products found matching "${searchQuery}"` : "No products available"}
+            <div className="h-[300px] flex items-center justify-center">
+              <LoadingState text="Loading products..." size="sm" />
             </div>
           )}
         </div>

@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 
 type KeyHandler = (e: KeyboardEvent) => void
 type KeyMap = Record<string, KeyHandler>
@@ -24,6 +24,14 @@ export function useKeyboardShortcut(
   } = {},
 ) {
   const { enabled = true, preventDefault = true, ignoreInputFields = true, ignoreModifiers = false } = options
+
+  // Store keyMap in a ref to prevent recreating the handler on every render
+  const keyMapRef = useRef<KeyMap>(keyMap)
+
+  // Update the ref when keyMap changes
+  useEffect(() => {
+    keyMapRef.current = keyMap
+  }, [keyMap])
 
   useEffect(() => {
     if (!enabled) return
@@ -47,8 +55,9 @@ export function useKeyboardShortcut(
         return
       }
 
-      const key = e.key.toLowerCase()
-      const handler = keyMap[key]
+      // Safely handle the key, ensuring it exists before calling toLowerCase()
+      const key = e.key ? e.key.toLowerCase() : ""
+      const handler = keyMapRef.current[key]
 
       if (handler) {
         if (preventDefault) {
@@ -60,5 +69,5 @@ export function useKeyboardShortcut(
 
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [keyMap, enabled, preventDefault, ignoreInputFields, ignoreModifiers, ...deps])
+  }, [enabled, preventDefault, ignoreInputFields, ignoreModifiers, ...deps])
 }

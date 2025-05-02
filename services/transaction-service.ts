@@ -1,7 +1,8 @@
 import { supabase } from "@/lib/supabase"
 import type { CartItem, Transaction, Discount } from "@/types/pos-types"
+import { type ServiceResponse, ErrorType, createError, handleError } from "@/lib/error-utils"
 
-export async function saveTransaction(transaction: Transaction): Promise<boolean> {
+export async function saveTransaction(transaction: Transaction): Promise<ServiceResponse<boolean>> {
   try {
     // Create a base transaction object with only the original fields
     const transactionData = {
@@ -18,8 +19,10 @@ export async function saveTransaction(transaction: Transaction): Promise<boolean
     const { error: transactionError } = await supabase.from("transactions").insert(transactionData)
 
     if (transactionError) {
-      console.error("Error saving transaction:", transactionError)
-      return false
+      return {
+        data: null,
+        error: createError(ErrorType.DATABASE, "Failed to save transaction", transactionError, 500),
+      }
     }
 
     // Then, insert all transaction items
@@ -35,18 +38,22 @@ export async function saveTransaction(transaction: Transaction): Promise<boolean
     const { error: itemsError } = await supabase.from("transaction_items").insert(transactionItems)
 
     if (itemsError) {
-      console.error("Error saving transaction items:", itemsError)
-      return false
+      return {
+        data: null,
+        error: createError(ErrorType.DATABASE, "Failed to save transaction items", itemsError, 500),
+      }
     }
 
-    return true
+    return { data: true, error: null }
   } catch (error) {
-    console.error("Error in saveTransaction:", error)
-    return false
+    return {
+      data: null,
+      error: handleError(error, "Failed to save transaction"),
+    }
   }
 }
 
-export async function getTransactions(startDate?: Date, endDate?: Date): Promise<Transaction[]> {
+export async function getTransactions(startDate?: Date, endDate?: Date): Promise<ServiceResponse<Transaction[]>> {
   try {
     let query = supabase
       .from("transactions")
@@ -67,12 +74,14 @@ export async function getTransactions(startDate?: Date, endDate?: Date): Promise
     const { data, error } = await query
 
     if (error) {
-      console.error("Error fetching transactions:", error)
-      return []
+      return {
+        data: [],
+        error: createError(ErrorType.DATABASE, "Failed to fetch transactions", error, 500),
+      }
     }
 
     // Transform the data to match our Transaction type
-    return data.map((tx) => {
+    const transactions = data.map((tx) => {
       const items = tx.items.map((item: any) => ({
         product: {
           id: item.product_id,
@@ -110,13 +119,17 @@ export async function getTransactions(startDate?: Date, endDate?: Date): Promise
         taxApplied: tx.tax_applied !== undefined ? tx.tax_applied : true, // Default to true for backward compatibility
       } as Transaction
     })
+
+    return { data: transactions, error: null }
   } catch (error) {
-    console.error("Error in getTransactions:", error)
-    return []
+    return {
+      data: [],
+      error: handleError(error, "Failed to fetch transactions"),
+    }
   }
 }
 
-export async function getRecentTransactions(limit = 10): Promise<Transaction[]> {
+export async function getRecentTransactions(limit = 10): Promise<ServiceResponse<Transaction[]>> {
   try {
     const { data, error } = await supabase
       .from("transactions")
@@ -128,12 +141,14 @@ export async function getRecentTransactions(limit = 10): Promise<Transaction[]> 
       .limit(limit)
 
     if (error) {
-      console.error("Error fetching recent transactions:", error)
-      return []
+      return {
+        data: [],
+        error: createError(ErrorType.DATABASE, "Failed to fetch recent transactions", error, 500),
+      }
     }
 
     // Transform the data to match our Transaction type
-    return data.map((tx) => {
+    const transactions = data.map((tx) => {
       const items = tx.items.map((item: any) => ({
         product: {
           id: item.product_id,
@@ -171,101 +186,57 @@ export async function getRecentTransactions(limit = 10): Promise<Transaction[]> 
         taxApplied: tx.tax_applied !== undefined ? tx.tax_applied : true,
       } as Transaction
     })
+
+    return { data: transactions, error: null }
   } catch (error) {
-    console.error("Error in getRecentTransactions:", error)
-    return []
-  }
-}
-
-export async function getTransactionById(id: string): Promise<Transaction | null> {
-  try {
-    const { data, error } = await supabase
-      .from("transactions")
-      .select(`
-        *,
-        items:transaction_items(*)
-      `)
-      .eq("id", id)
-      .single()
-
-    if (error || !data) {
-      console.error("Error fetching transaction:", error)
-      return null
-    }
-
-    // Transform the data to match our Transaction type
-    const items = data.items.map((item: any) => ({
-      product: {
-        id: item.product_id,
-        name: item.product_name,
-        price: item.price,
-        category: item.category,
-        imageUrl: "/placeholder.svg?height=100&width=100",
-      },
-      quantity: item.quantity,
-    })) as CartItem[]
-
-    // Build discount object if discount data exists
-    let discount: Discount | undefined
-    if (data.discount_type && data.discount_value) {
-      discount = {
-        type: data.discount_type,
-        value: data.discount_value,
-        description:
-          data.discount_description ||
-          `${data.discount_type === "percentage" ? data.discount_value + "%" : "$" + data.discount_value} discount`,
-      }
-    }
-
     return {
-      id: data.id,
-      items,
-      subtotal: data.subtotal,
-      discount,
-      discountAmount: data.discount_amount,
-      tax: data.tax,
-      total: data.total,
-      timestamp: new Date(data.timestamp),
-      paymentMethod: data.payment_method,
-      isReturn: data.is_return,
-      taxApplied: data.tax_applied !== undefined ? data.tax_applied : true,
-    } as Transaction
-  } catch (error) {
-    console.error("Error in getTransactionById:", error)
-    return null
+      data: [],
+      error: handleError(error, "Failed to fetch recent transactions"),
+    }
   }
 }
 
-export async function updateTransaction(transaction: Transaction): Promise<boolean> {
+export async function updateTransaction(transaction: Transaction): Promise<ServiceResponse<boolean>> {
   try {
-    // First, update the transaction record
+    // Prepare transaction data for update
+    const transactionData = {
+      subtotal: transaction.subtotal,
+      tax: transaction.tax,
+      total: transaction.total,
+      timestamp: transaction.timestamp.toISOString(),
+      payment_method: transaction.paymentMethod,
+      is_return: transaction.isReturn,
+      tax_applied: transaction.taxApplied,
+      discount_type: transaction.discount?.type || null,
+      discount_value: transaction.discount?.value || null,
+      discount_description: transaction.discount?.description || null,
+      discount_amount: transaction.discountAmount || null,
+    }
+
+    // Update the transaction record
     const { error: transactionError } = await supabase
       .from("transactions")
-      .update({
-        subtotal: transaction.subtotal,
-        tax: transaction.tax,
-        total: transaction.total,
-        timestamp: transaction.timestamp.toISOString(),
-        payment_method: transaction.paymentMethod,
-        is_return: transaction.isReturn,
-        tax_applied: transaction.taxApplied,
-      })
+      .update(transactionData)
       .eq("id", transaction.id)
 
     if (transactionError) {
-      console.error("Error updating transaction:", transactionError)
-      return false
+      return {
+        data: null,
+        error: createError(ErrorType.DATABASE, "Failed to update transaction", transactionError, 500),
+      }
     }
 
     // Delete existing transaction items
-    const { error: deleteError } = await supabase
+    const { error: deleteItemsError } = await supabase
       .from("transaction_items")
       .delete()
       .eq("transaction_id", transaction.id)
 
-    if (deleteError) {
-      console.error("Error deleting transaction items:", deleteError)
-      return false
+    if (deleteItemsError) {
+      return {
+        data: null,
+        error: createError(ErrorType.DATABASE, "Failed to delete existing transaction items", deleteItemsError, 500),
+      }
     }
 
     // Insert updated transaction items
@@ -281,14 +252,18 @@ export async function updateTransaction(transaction: Transaction): Promise<boole
     const { error: itemsError } = await supabase.from("transaction_items").insert(transactionItems)
 
     if (itemsError) {
-      console.error("Error saving updated transaction items:", itemsError)
-      return false
+      return {
+        data: null,
+        error: createError(ErrorType.DATABASE, "Failed to save updated transaction items", itemsError, 500),
+      }
     }
 
-    return true
+    return { data: true, error: null }
   } catch (error) {
-    console.error("Error in updateTransaction:", error)
-    return false
+    return {
+      data: null,
+      error: handleError(error, "Failed to update transaction"),
+    }
   }
 }
 
@@ -298,10 +273,8 @@ export async function getDailyTransactionSummary(date: Date): Promise<{
   transactionCount: number
 }> {
   try {
-    // Set the start and end of the day
     const startOfDay = new Date(date)
     startOfDay.setHours(0, 0, 0, 0)
-
     const endOfDay = new Date(date)
     endOfDay.setHours(23, 59, 59, 999)
 
@@ -312,13 +285,20 @@ export async function getDailyTransactionSummary(date: Date): Promise<{
       .lte("timestamp", endOfDay.toISOString())
 
     if (error) {
-      console.error("Error fetching daily summary:", error)
+      console.error("Error fetching daily transaction summary:", error)
       return { totalSales: 0, totalReturns: 0, transactionCount: 0 }
     }
 
-    const totalSales = data.filter((tx) => !tx.is_return).reduce((sum, tx) => sum + Number(tx.total), 0)
+    let totalSales = 0
+    let totalReturns = 0
 
-    const totalReturns = data.filter((tx) => tx.is_return).reduce((sum, tx) => sum + Math.abs(Number(tx.total)), 0)
+    data.forEach((tx) => {
+      if (tx.is_return) {
+        totalReturns += Math.abs(tx.total)
+      } else {
+        totalSales += tx.total
+      }
+    })
 
     return {
       totalSales,
