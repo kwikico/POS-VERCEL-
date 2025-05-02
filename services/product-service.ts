@@ -17,7 +17,7 @@ export async function saveProducts(products: Product[]): Promise<boolean> {
       tags: product.tags || [],
     }))
 
-    // Supabase client is now properly initialized as a singleton
+    // Upsert products (insert if not exists, update if exists)
     const { error } = await supabase.from("products").upsert(formattedProducts, { onConflict: "id" })
 
     if (error) {

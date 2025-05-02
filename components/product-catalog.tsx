@@ -1,97 +1,60 @@
 "use client"
 
-import type React from "react"
-
-import { useState, useRef, useEffect, useMemo } from "react"
+import { useState, useMemo, memo, useEffect } from "react"
 import { Search, ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { AlertDialog, AlertDialogContent } from "@/components/ui/alert-dialog"
-import BarcodeProductModal from "@/components/barcode-product-modal"
-import QuickAccessButtons from "@/components/quick-access-buttons"
-import ProductCard from "@/components/product-card"
+import ProductCard from "@/components/product-catalog/product-card"
 import type { Product } from "@/types/pos-types"
+import { QuickAccessButton } from "@/components/quick-access-button"
 
 interface ProductCatalogProps {
   products: Product[]
   onAddToCart: (product: Product) => void
-  onOpenManualEntry: () => void
-  onAddProduct: (product: Product) => void
   isLoading?: boolean
 }
 
-export default function ProductCatalog({
-  products,
-  onAddToCart,
-  onOpenManualEntry,
-  onAddProduct,
-  isLoading = false,
-}: ProductCatalogProps) {
+const PRODUCTS_PER_PAGE = 6
+const QUICK_ACCESS_COLORS = [
+  "bg-emerald-500",
+  "bg-blue-500",
+  "bg-purple-500",
+  "bg-amber-500",
+  "bg-rose-500",
+  "bg-cyan-500",
+  "bg-indigo-500",
+  "bg-lime-500",
+  "bg-orange-500",
+]
+
+function ProductCatalogComponent({ products, onAddToCart, isLoading = false }: ProductCatalogProps) {
   const [searchQuery, setSearchQuery] = useState("")
   const [currentPage, setCurrentPage] = useState(1)
-  const [showNotFoundDialog, setShowNotFoundDialog] = useState(false)
-  const [showAddProductModal, setShowAddProductModal] = useState(false)
-  const [scannedBarcode, setScannedBarcode] = useState("")
-  const searchInputRef = useRef<HTMLInputElement>(null)
-  const productsPerPage = 12
-  const barcodeRegex = /^\d{8,14}$/ // Basic barcode format validation
-  const [isSearching, setIsSearching] = useState(false)
 
-  // Focus the search input field on component mount
-  useEffect(() => {
-    if (searchInputRef.current) {
-      searchInputRef.current.focus()
-    }
-  }, [])
-
-  // Handle keyboard events for the not found dialog
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!showNotFoundDialog) return
-
-      if (e.key.toLowerCase() === "y") {
-        setShowNotFoundDialog(false)
-        setShowAddProductModal(true)
-      } else if (e.key.toLowerCase() === "n" || e.key === "Escape") {
-        setShowNotFoundDialog(false)
-        setTimeout(() => searchInputRef.current?.focus(), 100)
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [showNotFoundDialog])
-
-  // Add keyboard shortcut to focus search input
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Focus search input when "/" key is pressed and no input is focused
-      if (e.key === "/" && document.activeElement?.tagName !== "INPUT") {
-        e.preventDefault()
-        searchInputRef.current?.focus()
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [])
-
-  // Filter products based on search query with memoization for performance
+  // Filter products based on search query - memoized
   const filteredProducts = useMemo(() => {
+    if (!searchQuery.trim()) return products
+
+    const query = searchQuery.toLowerCase()
     return products.filter((product) => {
-      const matchesSearch =
-        product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (product.barcode && product.barcode.includes(searchQuery.toLowerCase()))
-      return matchesSearch
+      return (
+        product.name.toLowerCase().includes(query) ||
+        product.category.toLowerCase().includes(query) ||
+        (product.barcode && product.barcode.toLowerCase().includes(query))
+      )
     })
   }, [products, searchQuery])
 
   // Calculate pagination
-  const indexOfLastProduct = currentPage * productsPerPage
-  const indexOfFirstProduct = indexOfLastProduct - productsPerPage
-  const currentProducts = filteredProducts.slice(indexOfFirstProduct, indexOfLastProduct)
-  const totalPages = Math.ceil(filteredProducts.length / productsPerPage)
+  const totalPages = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE)
+
+  // Get current page products - memoized
+  const currentProducts = useMemo(() => {
+    const indexOfLastProduct = currentPage * PRODUCTS_PER_PAGE
+    const indexOfFirstProduct = indexOfLastProduct - PRODUCTS_PER_PAGE
+    return filteredProducts.slice(indexOfFirstProduct, indexOfLastProduct)
+  }, [filteredProducts, currentPage])
 
   const nextPage = () => {
     if (currentPage < totalPages) {
@@ -105,91 +68,18 @@ export default function ProductCatalog({
     }
   }
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-
-    if (!searchQuery.trim()) return
-
-    // Check if the search query looks like a barcode
-    if (barcodeRegex.test(searchQuery.trim())) {
-      // Find product by barcode
-      const product = products.find((p) => p.barcode === searchQuery.trim())
-
-      if (product) {
-        // Product found, add to cart
-        onAddToCart(product)
-        setSearchQuery("")
-      } else {
-        // Product not found, show dialog
-        setScannedBarcode(searchQuery.trim())
-        setShowNotFoundDialog(true)
-        // Don't clear search query yet, we might need it for adding a new product
-      }
-    }
-  }
-
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    try {
-      const value = e.target.value
-      setSearchQuery(value)
-
-      // If input looks like a complete barcode and ends with Enter key character
-      if (barcodeRegex.test(value.trim()) && value.includes("\n")) {
-        // Remove the Enter key character
-        const cleanBarcode = value.trim().replace(/\n/g, "")
-        setSearchQuery(cleanBarcode)
-
-        // Find product by barcode
-        const product = products.find((p) => p.barcode === cleanBarcode)
-
-        if (product) {
-          // Product found, add to cart
-          onAddToCart(product)
-          setSearchQuery("")
-        } else {
-          // Product not found, show dialog
-          setScannedBarcode(cleanBarcode)
-          setShowNotFoundDialog(true)
-        }
-      }
-    } catch (error) {
-      console.error("Error processing search input:", error)
-      // Fallback behavior
-      setSearchQuery(e.target.value)
-    }
-  }
-
-  const handleAddProduct = (newProduct: Product) => {
-    // Add the product to inventory
-    onAddProduct(newProduct)
-
-    // Add the product to cart
-    onAddToCart(newProduct)
-
-    // Close the modal
-    setShowAddProductModal(false)
-
-    // Clear the search field
-    setSearchQuery("")
-
-    // Refocus the search input
-    setTimeout(() => searchInputRef.current?.focus(), 100)
-  }
-
-  const handleCloseAddProductModal = () => {
-    setShowAddProductModal(false)
-    setSearchQuery("")
-    setTimeout(() => searchInputRef.current?.focus(), 100)
-  }
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [searchQuery])
 
   if (isLoading) {
     return (
       <Card className="bg-white shadow-md border border-slate-200 h-full">
-        <CardContent className="p-4 flex flex-col items-center justify-center h-full">
+        <CardContent className="p-4 flex items-center justify-center h-full">
           <div className="text-center">
             <Loader2 className="h-8 w-8 animate-spin mx-auto text-slate-400" />
             <p className="mt-2 text-slate-500">Loading products...</p>
-            <p className="text-xs text-slate-400 mt-1">This may take a moment</p>
           </div>
         </CardContent>
       </Card>
@@ -199,54 +89,51 @@ export default function ProductCatalog({
   return (
     <Card className="bg-white shadow-md border border-slate-200 h-full">
       <CardContent className="p-4 space-y-4">
-        <div className="flex justify-between items-center mb-4">
+        <div className="mb-4">
           <h2 className="text-xl font-semibold">Products</h2>
         </div>
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault()
-            setIsSearching(true)
-            try {
-              handleSearchSubmit(e)
-            } finally {
-              setIsSearching(false)
-            }
-          }}
-          className="relative"
-        >
-          <Search
-            className={`absolute left-2.5 top-2.5 h-4 w-4 ${isSearching ? "text-blue-600 animate-pulse" : "text-blue-500"}`}
-          />
-          <Input
-            ref={searchInputRef}
-            type="search"
-            placeholder="Search products or scan barcode... (Press '/' to focus)"
-            className="pl-8 border-slate-300 focus:border-slate-400 focus:ring-slate-400 focus:ring-2 rounded-lg shadow-sm hover:shadow transition-shadow bg-slate-50/50 hover:bg-white text-slate-900 placeholder:text-slate-500"
-            value={searchQuery}
-            onChange={handleSearchChange}
-            autoComplete="off"
-            aria-label="Search products"
-          />
-        </form>
+        <div className="mb-4">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-500" />
+            <Input
+              type="search"
+              placeholder="Search products by name, category, or barcode..."
+              className="pl-8 border-slate-300 focus:border-slate-400 focus:ring-slate-400"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Search products"
+            />
+          </div>
+        </div>
 
-        {/* Quick Access Buttons */}
-        <QuickAccessButtons products={products} onAddToCart={onAddToCart} />
+        <div className="mb-6">
+          <h3 className="text-sm font-medium text-slate-500 mb-3">Quick Access Products</h3>
+          <div className="grid grid-cols-3 gap-4">
+            {Array.from({ length: 9 }).map((_, index) => (
+              <QuickAccessButton
+                key={`button${index + 1}`}
+                color={QUICK_ACCESS_COLORS[index]}
+                productId={`button${index + 1}`}
+                products={products}
+                onSelect={onAddToCart}
+              />
+            ))}
+          </div>
+        </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-          {currentProducts.map((product) => (
-            <ProductCard key={product.id} product={product} onClick={onAddToCart} />
-          ))}
-
-          {currentProducts.length === 0 && (
-            <div className="col-span-full text-center py-8 text-gray-500">
-              No products found. Try a different search.
+        <div className="grid grid-cols-6 gap-3">
+          {currentProducts.length > 0 ? (
+            currentProducts.map((product) => <ProductCard key={product.id} product={product} onClick={onAddToCart} />)
+          ) : (
+            <div className="col-span-full text-center py-8 text-slate-500">
+              {searchQuery ? `No products found matching "${searchQuery}"` : "No products available"}
             </div>
           )}
         </div>
 
-        {/* Pagination controls */}
-        {filteredProducts.length > productsPerPage && (
+        {/* Pagination controls - only show if we have more than one page */}
+        {totalPages > 1 && (
           <div className="flex items-center justify-between mt-6">
             <Button
               variant="outline"
@@ -271,28 +158,10 @@ export default function ProductCatalog({
             </Button>
           </div>
         )}
-
-        {/* Product Not Found Dialog */}
-        <AlertDialog open={showNotFoundDialog} onOpenChange={setShowNotFoundDialog}>
-          <AlertDialogContent className="max-w-[350px] p-6">
-            <div className="text-center">
-              <p className="mb-4">Product not found. Press [N] to cancel or [Y] to add product.</p>
-              <p className="text-sm text-slate-500">Barcode: {scannedBarcode}</p>
-            </div>
-          </AlertDialogContent>
-        </AlertDialog>
-
-        {/* Add Product Modal */}
-        <BarcodeProductModal
-          isOpen={showAddProductModal}
-          barcode={scannedBarcode}
-          onClose={handleCloseAddProductModal}
-          onSave={handleAddProduct}
-          categories={Array.from(new Set(products.map((p) => p.category))).filter(
-            (category) => !["custom-price"].includes(category),
-          )}
-        />
       </CardContent>
     </Card>
   )
 }
+
+// Use memo to prevent unnecessary re-renders
+export default memo(ProductCatalogComponent)

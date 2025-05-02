@@ -2,8 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-@import "./header-buttons.css";
-
 @layer base {
   :root {
     --background: 0 0% 100%;
@@ -42,6 +40,10 @@
     --chart-4: 219 14% 51%;
     --chart-5: 218 11% 65%;
     --chart-6: 220 14% 80%;
+
+    /* Navigation bar colors */
+    --nav-gradient-from: #007bff;
+    --nav-gradient-to: #ff5ca8;
   }
 
   .dark {
@@ -72,6 +74,10 @@
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;
     --ring: 212.7 26.8% 83.9%;
+
+    /* Navigation bar colors - darker for dark mode */
+    --nav-gradient-from: #0056b3;
+    --nav-gradient-to: #d44087;
   }
 }
 
@@ -119,42 +125,63 @@
   z-index: -1;
 }
 
-/* Header button styles */
-.header-button {
-  @apply bg-white/20 hover:bg-white/30 text-white border-white/30 transition-all duration-200;
+/* Navigation styles */
+.nav-button {
+  @apply flex items-center px-4 py-2 rounded-lg transition-colors;
 }
 
-.header-button:hover {
-  @apply shadow-md;
-  transform: translateY(-1px);
+.nav-button-active {
+  @apply bg-white/20 text-white;
 }
 
-.header-button:active {
-  @apply shadow-inner;
-  transform: translateY(1px);
+.nav-button-inactive {
+  @apply text-white/80 hover:bg-white/10;
 }
 
-/* Navigation button styles */
-.nav-btn {
-  @apply px-3 py-1.5 rounded-lg transition-all duration-200 font-medium;
+.nav-button-disabled {
+  @apply text-white/40 cursor-not-allowed;
 }
 
-.nav-btn-active {
-  @apply bg-white text-blue-600 shadow-sm;
+/* Performance optimizations */
+.will-change-transform {
+  will-change: transform;
 }
 
-@media (max-width: 640px) {
-  .nav-btn span {
-    @apply hidden;
+.backface-visibility-hidden {
+  backface-visibility: hidden;
+}
+
+/* Animations */
+.animate-in {
+  animation-duration: 300ms;
+  animation-timing-function: ease-in-out;
+  animation-fill-mode: both;
+}
+
+.fade-in-50 {
+  animation-name: fadeIn50;
+}
+
+@keyframes fadeIn50 {
+  from {
+    opacity: 0;
   }
-
-  .nav-btn {
-    @apply px-2 py-1;
+  to {
+    opacity: 1;
   }
 }
 
-@media (min-width: 641px) and (max-width: 768px) {
-  .nav-btn {
-    @apply text-xs;
+/* Responsive optimizations */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
+}
+
+/* Image optimizations */
+img {
+  content-visibility: auto;
 }

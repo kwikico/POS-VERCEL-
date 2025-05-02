@@ -34,5 +34,5 @@ export interface Transaction {
   timestamp: Date
   paymentMethod: string
   isReturn: boolean
-  taxApplied?: boolean // Make this optional since it's not in the database
+  taxApplied: boolean
 }

@@ -1,29 +1,29 @@
 "use client"
 
-import { useState } from "react"
+import { useState, memo, useCallback } from "react"
 import {
-  Minus,
-  Plus,
   ShoppingCartIcon as CartIcon,
-  Trash2,
   CreditCard,
   DollarSign,
   RotateCcw,
   PlusIcon,
-  Tag,
   ToggleLeft,
   ToggleRight,
+  Tag,
+  Trash2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import DiscountModal from "@/components/discount-modal"
-import OrderSummary from "@/components/order-summary"
-import { calculateOrderTotals } from "@/lib/utils"
-import type { CartItem, Discount } from "@/types/pos-types"
+import { CartItem } from "@/components/shopping-cart/cart-item"
+import { DiscountForm } from "@/components/shopping-cart/discount-form"
+import { CartSummary } from "@/components/shopping-cart/cart-summary"
+import { TAX_RATE } from "@/lib/constants"
+import { useKeyboardShortcut } from "@/hooks/use-keyboard-shortcut"
+import type { CartItem as CartItemType, Discount } from "@/types/pos-types"
 
 interface ShoppingCartProps {
-  cart: CartItem[]
+  cart: CartItemType[]
   onUpdateQuantity: (productId: string, quantity: number) => void
   onRemoveItem: (productId: string) => void
   onClearCart: () => void
@@ -36,7 +36,7 @@ interface ShoppingCartProps {
   onRemoveDiscount: () => void
 }
 
-export default function ShoppingCart({
+function ShoppingCartComponent({
   cart,
   onUpdateQuantity,
   onRemoveItem,
@@ -52,11 +52,58 @@ export default function ShoppingCart({
   const [transactionType, setTransactionType] = useState<"sale" | "return">("sale")
   const [isDiscountOpen, setIsDiscountOpen] = useState<boolean>(false)
 
-  const { subtotal, discountAmount, tax, total } = calculateOrderTotals({
-    items: cart,
-    discount,
-    taxEnabled,
-  })
+  // Calculate cart totals
+  const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0)
+
+  // Calculate discount amount
+  const discountAmount = discount
+    ? discount.type === "percentage"
+      ? (subtotal * discount.value) / 100
+      : discount.value
+    : 0
+
+  // Calculate subtotal after discount
+  const subtotalAfterDiscount = Math.max(0, subtotal - discountAmount)
+
+  // Calculate tax only if enabled
+  const tax = taxEnabled ? subtotalAfterDiscount * TAX_RATE : 0
+  const total = subtotalAfterDiscount + tax
+
+  // Handle keyboard shortcuts
+  useKeyboardShortcut(
+    {
+      p: () => handleCheckout("card"),
+      o: () => handleCheckout("cash"),
+      t: onTaxToggle,
+      d: () => {
+        if (discount) {
+          onRemoveDiscount()
+        } else {
+          setIsDiscountOpen(true)
+        }
+      },
+    },
+    [discount, onRemoveDiscount, onTaxToggle, cart.length],
+  )
+
+  // Handle checkout with specified payment method
+  const handleCheckout = useCallback(
+    (paymentMethod: string) => {
+      if (cart.length > 0) {
+        onCheckout(paymentMethod, transactionType === "return")
+      }
+    },
+    [cart.length, onCheckout, transactionType],
+  )
+
+  // Handle discount application
+  const handleApplyDiscount = useCallback(
+    (newDiscount: Discount) => {
+      onApplyDiscount(newDiscount)
+      setIsDiscountOpen(false)
+    },
+    [onApplyDiscount],
+  )
 
   return (
     <Card className="bg-white shadow-md border border-gradient-primary h-full">
@@ -92,7 +139,7 @@ export default function ShoppingCart({
           onClick={onOpenManualEntry}
         >
           <PlusIcon className="h-4 w-4 mr-2" />
-          Add Manual Item
+          Add Manual Item <span className="ml-1 text-xs text-slate-400">(N)</span>
         </Button>
 
         {/* Cart items - scrollable */}
@@ -102,96 +149,58 @@ export default function ShoppingCart({
           ) : (
             <div className="divide-y">
               {cart.map((item) => (
-                <div
+                <CartItem
                   key={item.product.id}
-                  className="flex items-center justify-between p-2 hover:bg-slate-50 border-b border-slate-100"
-                >
-                  <div className="flex items-center space-x-2">
-                    <div className="w-8 h-8 rounded-md bg-gray-100 overflow-hidden">
-                      <img
-                        src={item.product.imageUrl || "/placeholder.svg"}
-                        alt={item.product.name}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div>
-                      <div className="font-medium text-sm truncate max-w-[120px]">{item.product.name}</div>
-                      <div className="text-xs text-gray-500">${item.product.price.toFixed(2)}</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center space-x-1">
-                    <div className="text-sm font-medium mr-1">${(item.product.price * item.quantity).toFixed(2)}</div>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-6 w-6 border-slate-300"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onUpdateQuantity(item.product.id, item.quantity - 1)
-                      }}
-                    >
-                      <Minus className="h-3 w-3" />
-                    </Button>
-                    <span className="w-5 text-center text-sm">{item.quantity}</span>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-6 w-6 border-slate-300"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onUpdateQuantity(item.product.id, item.quantity + 1)
-                      }}
-                    >
-                      <Plus className="h-3 w-3" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 text-red-500"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onRemoveItem(item.product.id)
-                      }}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </div>
+                  item={item}
+                  onUpdateQuantity={onUpdateQuantity}
+                  onRemoveItem={onRemoveItem}
+                />
               ))}
             </div>
           )}
         </div>
 
         {/* Discount UI */}
-        <div className="mb-2">
-          {discount ? (
-            <div className="flex justify-between items-center p-2 bg-blue-50 rounded-md mb-2">
-              <div>
-                <span className="text-sm font-medium flex items-center">
-                  <Tag className="h-4 w-4 mr-1 text-blue-600" />
-                  {discount.description}
-                </span>
+        {!isDiscountOpen ? (
+          <div className="mb-2">
+            {discount ? (
+              <div className="flex justify-between items-center p-2 bg-blue-50 rounded-md mb-2">
+                <div>
+                  <span className="text-sm font-medium flex items-center">
+                    <Tag className="h-4 w-4 mr-1 text-blue-600" />
+                    {discount.description}
+                  </span>
+                </div>
+                <div className="flex items-center">
+                  <span className="text-xs text-slate-500 mr-1">(D)</span>
+                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onRemoveDiscount}>
+                    <Trash2 className="h-4 w-4 text-blue-600" />
+                  </Button>
+                </div>
               </div>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onRemoveDiscount}>
-                <Trash2 className="h-4 w-4 text-blue-600" />
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full mb-2 border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-600"
+                onClick={() => setIsDiscountOpen(true)}
+              >
+                <Tag className="h-4 w-4 mr-2" />
+                Add Discount <span className="ml-1 text-xs text-slate-400">(D)</span>
               </Button>
-            </div>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full mb-2 border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-600"
-              onClick={() => setIsDiscountOpen(true)}
-            >
-              <Tag className="h-4 w-4 mr-2" />
-              Add Discount
-            </Button>
-          )}
-        </div>
+            )}
+          </div>
+        ) : (
+          <div className="mb-2">
+            <DiscountForm onApply={handleApplyDiscount} onCancel={() => setIsDiscountOpen(false)} />
+          </div>
+        )}
 
         {/* Tax Toggle */}
         <div className="flex justify-between items-center mb-2 p-2 bg-slate-50 rounded-md">
-          <span className="text-sm font-medium">Apply 13% Tax</span>
+          <span className="text-sm font-medium flex items-center">
+            Apply 13% Tax <span className="ml-1 text-xs text-slate-400">(T)</span>
+          </span>
           <Button variant="ghost" size="sm" className="p-0 m-0 hover:bg-transparent" onClick={onTaxToggle}>
             {taxEnabled ? (
               <ToggleRight className="h-6 w-6 text-blue-500" />
@@ -203,21 +212,18 @@ export default function ShoppingCart({
 
         {/* Totals and checkout */}
         <div className="mt-auto">
-          <div className="space-y-1.5 mb-4">
-            <OrderSummary
-              subtotal={subtotal}
-              discount={discount || undefined}
-              discountAmount={discountAmount}
-              tax={tax}
-              total={total}
-              isReturn={transactionType === "return"}
-              taxApplied={taxEnabled}
-            />
-          </div>
+          <CartSummary
+            subtotal={subtotal}
+            discount={discount}
+            discountAmount={discountAmount}
+            taxEnabled={taxEnabled}
+            tax={tax}
+            total={total}
+          />
 
           <div className="grid grid-cols-2 gap-2">
             <Button
-              onClick={() => onCheckout("card", transactionType === "return")}
+              onClick={() => handleCheckout("card")}
               disabled={cart.length === 0}
               className={
                 transactionType === "return" ? "bg-amber-600 hover:bg-amber-700" : "bg-emerald-600 hover:bg-emerald-700"
@@ -225,9 +231,10 @@ export default function ShoppingCart({
             >
               <CreditCard className="mr-2 h-4 w-4" />
               {transactionType === "sale" ? "Card" : "Return Card"}
+              <span className="ml-1 text-xs opacity-75">(P)</span>
             </Button>
             <Button
-              onClick={() => onCheckout("cash", transactionType === "return")}
+              onClick={() => handleCheckout("cash")}
               disabled={cart.length === 0}
               className={
                 transactionType === "return" ? "bg-amber-600 hover:bg-amber-700" : "bg-emerald-600 hover:bg-emerald-700"
@@ -235,17 +242,19 @@ export default function ShoppingCart({
             >
               <DollarSign className="mr-2 h-4 w-4" />
               {transactionType === "sale" ? "Cash" : "Return Cash"}
+              <span className="ml-1 text-xs opacity-75">(O)</span>
             </Button>
             <Button variant="outline" className="w-full col-span-2 border-slate-300" onClick={onClearCart}>
               <RotateCcw className="mr-2 h-4 w-4" />
               Clear Cart
+              <span className="ml-1 text-xs text-slate-400">(C)</span>
             </Button>
           </div>
         </div>
-
-        {/* Discount Modal */}
-        <DiscountModal isOpen={isDiscountOpen} onClose={() => setIsDiscountOpen(false)} onApply={onApplyDiscount} />
       </CardContent>
     </Card>
   )
 }
+
+// Use memo to prevent unnecessary re-renders
+export default memo(ShoppingCartComponent)
