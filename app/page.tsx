@@ -21,8 +21,12 @@ import { useTransactionsData } from "@/hooks/use-transactions-data"
 import { useKeyboardShortcut } from "@/hooks/use-keyboard-shortcut"
 import { TOAST_DURATION } from "@/lib/constants"
 import { ErrorBoundary } from "@/components/error-boundary"
-import { getProductByBarcode } from "@/services/product-service"
+import { getProductByBarcode, checkBarcodeExists } from "@/services/product-service"
 import type { Product } from "@/types/pos-types"
+
+// Create a recent scans cache to optimize repeated scans
+const RECENT_SCANS_LIMIT = 50
+const recentScans = new Map<string, Product>()
 
 export default function POSSystem() {
   const [activeTab, setActiveTab] = useState("pos")
@@ -94,6 +98,16 @@ export default function POSSystem() {
         setManualEntryProduct(product)
         setIsManualEntryOpen(true)
         return
+      }
+
+      // Add to recent scans cache for faster lookup next time
+      if (product.barcode) {
+        // Use LRU cache approach - if we hit the limit, remove oldest entry
+        if (recentScans.size >= RECENT_SCANS_LIMIT) {
+          const firstKey = recentScans.keys().next().value
+          recentScans.delete(firstKey)
+        }
+        recentScans.set(product.barcode, product)
       }
 
       addToCart(product)
@@ -198,12 +212,18 @@ export default function POSSystem() {
   // Check if a product with the given barcode already exists in the inventory
   const findProductByBarcode = useCallback(
     (barcode: string): Product | undefined => {
+      // First check the recent scans cache for fastest lookup
+      if (recentScans.has(barcode)) {
+        return recentScans.get(barcode)
+      }
+
+      // Then check the full products array
       return products.find((product) => product.barcode === barcode)
     },
     [products],
   )
 
-  // Handle barcode scanning - UPDATED to prevent duplicate entries
+  // Optimized barcode scanning process
   const handleBarcodeSubmit = useCallback(
     async (barcode: string) => {
       console.log("Barcode scanned:", barcode)
@@ -218,7 +238,16 @@ export default function POSSystem() {
       processingBarcodeRef.current = true
 
       try {
-        // First, check if the product already exists in our local inventory
+        // First, check the recent scans cache for fastest lookup
+        if (recentScans.has(barcode)) {
+          const cachedProduct = recentScans.get(barcode)
+          console.log("Product found in recent scans cache:", cachedProduct)
+          handleAddToCart(cachedProduct!)
+          processingBarcodeRef.current = false
+          return
+        }
+
+        // Then check if the product already exists in our local inventory
         const existingProduct = findProductByBarcode(barcode)
 
         if (existingProduct) {
@@ -232,34 +261,40 @@ export default function POSSystem() {
           return
         }
 
-        // If not found locally, search using the service
-        const { data: product, error } = await getProductByBarcode(barcode)
+        // Before making a full product query, check if barcode exists
+        // This is faster than fetching the entire product
+        const { data: exists } = await checkBarcodeExists(barcode)
 
-        if (error) {
-          toast({
-            title: "Error",
-            description: error.message,
-            variant: "destructive",
-            duration: TOAST_DURATION,
-          })
-          processingBarcodeRef.current = false
-          return
-        }
+        if (exists) {
+          // If barcode exists, fetch the full product
+          const { data: product, error } = await getProductByBarcode(barcode)
 
-        if (product) {
-          console.log("Product found in database:", product)
-          // If product found in database, add to cart
-          handleAddToCart(product)
+          if (error) {
+            toast({
+              title: "Error",
+              description: error.message,
+              variant: "destructive",
+              duration: TOAST_DURATION,
+            })
+            processingBarcodeRef.current = false
+            return
+          }
 
-          // Show success toast
-          toast({
-            title: "Product scanned",
-            description: `${product.name} added to cart`,
-            duration: TOAST_DURATION,
-          })
+          if (product) {
+            console.log("Product found in database:", product)
+            // If product found in database, add to cart
+            handleAddToCart(product)
 
-          // Reset processing flag
-          processingBarcodeRef.current = false
+            // Show success toast
+            toast({
+              title: "Product scanned",
+              description: `${product.name} added to cart`,
+              duration: TOAST_DURATION,
+            })
+
+            // Reset processing flag
+            processingBarcodeRef.current = false
+          }
         } else {
           console.log("Product not found for barcode:", barcode)
 
@@ -312,6 +347,15 @@ export default function POSSystem() {
 
       // Add the product to the inventory
       updateProducts([...products, newProduct])
+
+      // Add to recent scans cache
+      if (newProduct.barcode) {
+        if (recentScans.size >= RECENT_SCANS_LIMIT) {
+          const firstKey = recentScans.keys().next().value
+          recentScans.delete(firstKey)
+        }
+        recentScans.set(newProduct.barcode, newProduct)
+      }
 
       // Add the product to the cart
       addToCart(newProduct)

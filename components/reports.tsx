@@ -24,10 +24,10 @@ import { getDailyTransactionSummary } from "@/services/transaction-service"
 import { Loader2 } from "lucide-react"
 
 interface ReportsProps {
-  transactions: Transaction[]
+  transactions?: Transaction[]
 }
 
-export default function Reports({ transactions }: ReportsProps) {
+export default function Reports({ transactions = [] }: ReportsProps) {
   const [reportType, setReportType] = useState("sales")
   const [dateRange, setDateRange] = useState("today")
   const [startDate, setStartDate] = useState(getDefaultStartDate())
@@ -107,8 +107,11 @@ export default function Reports({ transactions }: ReportsProps) {
     }
   }
 
+  // Ensure transactions is always an array
+  const safeTransactions = Array.isArray(transactions) ? transactions : []
+
   // Filter transactions based on date range
-  const filteredTransactions = transactions.filter((transaction) => {
+  const filteredTransactions = safeTransactions.filter((transaction) => {
     const txDate = new Date(transaction.timestamp)
     const today = new Date()
     const yesterday = new Date(today)
@@ -368,7 +371,7 @@ export default function Reports({ transactions }: ReportsProps) {
                             )}
                           </div>
                           <div className="text-sm capitalize">{tx.paymentMethod}</div>
-                          <div className="text-sm">{tx.items.length}</div>
+                          <div className="text-sm">{tx.items ? tx.items.length : 0}</div>
                           <div className="text-sm text-right font-medium">${Math.abs(tx.total).toFixed(2)}</div>
                         </div>
                       ))

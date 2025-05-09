@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase"
 import type { Product } from "@/types/pos-types"
 import { type ServiceResponse, ErrorType, createError, handleError } from "@/lib/error-utils"
+import { barcodeCache } from "./barcode-cache-service"
 
 // Default fallback products for critical failures
 const FALLBACK_PRODUCTS: Product[] = [
@@ -15,6 +16,7 @@ const FALLBACK_PRODUCTS: Product[] = [
   },
 ]
 
+// Optimized product service with caching
 export async function saveProducts(products: Product[]): Promise<ServiceResponse<boolean>> {
   try {
     // Format products for Supabase
@@ -38,6 +40,13 @@ export async function saveProducts(products: Product[]): Promise<ServiceResponse
       return {
         data: null,
         error: createError(ErrorType.DATABASE, "Failed to save products to database", error, 500),
+      }
+    }
+
+    // Update the cache for any products with barcodes
+    for (const product of products) {
+      if (product.barcode) {
+        barcodeCache.set(product.barcode, true)
       }
     }
 
@@ -83,6 +92,13 @@ export async function getProducts(): Promise<ServiceResponse<Product[]>> {
       tags: product.tags,
     }))
 
+    // Update the cache for all products with barcodes
+    for (const product of products) {
+      if (product.barcode) {
+        barcodeCache.set(product.barcode, true)
+      }
+    }
+
     return { data: products, error: null }
   } catch (error) {
     // For critical errors, return fallback data to keep the app running
@@ -97,6 +113,10 @@ export async function getProducts(): Promise<ServiceResponse<Product[]>> {
 
 export async function deleteProduct(productId: string): Promise<ServiceResponse<boolean>> {
   try {
+    // First get the product to find its barcode
+    const { data: product } = await supabase.from("products").select("barcode").eq("id", productId).single()
+
+    // Delete the product
     const { error } = await supabase.from("products").delete().eq("id", productId)
 
     if (error) {
@@ -104,6 +124,11 @@ export async function deleteProduct(productId: string): Promise<ServiceResponse<
         data: null,
         error: createError(ErrorType.DATABASE, "Failed to delete product from database", error, 500),
       }
+    }
+
+    // If the product had a barcode, update the cache
+    if (product && product.barcode) {
+      barcodeCache.set(product.barcode, false)
     }
 
     return { data: true, error: null }
@@ -129,6 +154,8 @@ export async function getProductByBarcode(barcode: string): Promise<ServiceRespo
     if (error) {
       if (error.code === "PGRST116") {
         // No rows returned - product not found
+        // Update cache to remember this barcode doesn't exist
+        barcodeCache.set(barcode, false)
         return { data: null, error: null }
       }
 
@@ -152,6 +179,9 @@ export async function getProductByBarcode(barcode: string): Promise<ServiceRespo
       tags: data.tags,
     }
 
+    // Update cache to remember this barcode exists
+    barcodeCache.set(barcode, true)
+
     return { data: product, error: null }
   } catch (error) {
     return {
@@ -161,7 +191,7 @@ export async function getProductByBarcode(barcode: string): Promise<ServiceRespo
   }
 }
 
-// New function to check if a barcode already exists
+// Optimized function to check if a barcode exists
 export async function checkBarcodeExists(barcode: string): Promise<ServiceResponse<boolean>> {
   try {
     if (!barcode || barcode.trim() === "") {
@@ -171,9 +201,17 @@ export async function checkBarcodeExists(barcode: string): Promise<ServiceRespon
       }
     }
 
-    const { data, error, count } = await supabase
+    // Check the cache first
+    if (barcodeCache.has(barcode)) {
+      const exists = barcodeCache.get(barcode)
+      return { data: exists || false, error: null }
+    }
+
+    // If not in cache, query the database
+    // Use count instead of fetching all fields for better performance
+    const { count, error } = await supabase
       .from("products")
-      .select("id", { count: "exact" })
+      .select("id", { count: "exact", head: true })
       .eq("barcode", barcode)
 
     if (error) {
@@ -183,7 +221,12 @@ export async function checkBarcodeExists(barcode: string): Promise<ServiceRespon
       }
     }
 
-    return { data: count !== null && count > 0, error: null }
+    const exists = count !== null && count > 0
+
+    // Update the cache with the result
+    barcodeCache.set(barcode, exists)
+
+    return { data: exists, error: null }
   } catch (error) {
     return {
       data: false,

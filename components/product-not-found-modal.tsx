@@ -43,7 +43,8 @@ interface FormErrors {
 }
 
 export default function ProductNotFoundModal({ isOpen, barcode, onClose, onAddNew }: ProductNotFoundModalProps) {
-  const [timeRemaining, setTimeRemaining] = useState(5)
+  // Reduced from 5 to 2 seconds
+  const [timeRemaining, setTimeRemaining] = useState(2)
   const [formData, setFormData] = useState({
     name: "",
     price: "",
@@ -63,7 +64,7 @@ export default function ProductNotFoundModal({ isOpen, barcode, onClose, onAddNe
   // Reset timer and form when modal opens
   useEffect(() => {
     if (isOpen) {
-      setTimeRemaining(5)
+      setTimeRemaining(2) // Reduced from 5 to 2 seconds
       setFormData({
         name: "",
         price: "",
@@ -75,9 +76,9 @@ export default function ProductNotFoundModal({ isOpen, barcode, onClose, onAddNe
       setIsSubmitting(false)
       setIsCheckingBarcode(true)
       setBarcodeExists(false)
-      console.log("ProductNotFoundModal opened with barcode:", barcode)
 
       // Check if barcode already exists in the database
+      // Start this check immediately when the modal opens
       const checkBarcode = async () => {
         try {
           const { data: exists, error } = await checkBarcodeExists(barcode)
@@ -93,6 +94,7 @@ export default function ProductNotFoundModal({ isOpen, barcode, onClose, onAddNe
         }
       }
 
+      // Execute the barcode check immediately
       checkBarcode()
     }
   }, [isOpen, barcode])
@@ -104,23 +106,22 @@ export default function ProductNotFoundModal({ isOpen, barcode, onClose, onAddNe
     }
   }, [isOpen, timeRemaining])
 
-  // Countdown timer and auto-close
+  // Countdown timer - optimized to use a more efficient interval
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen || timeRemaining <= 0) return
 
     const timer = setInterval(() => {
       setTimeRemaining((prev) => {
         const newTime = prev - 1
         if (newTime <= 0) {
           clearInterval(timer)
-          // Don't auto-close, just stop the timer
         }
         return newTime > 0 ? newTime : 0
       })
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [isOpen])
+  }, [isOpen, timeRemaining])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type, checked } = e.target
@@ -264,7 +265,7 @@ export default function ProductNotFoundModal({ isOpen, barcode, onClose, onAddNe
               <span className="text-xs text-slate-400">{timeRemaining}s remaining</span>
             </div>
             <Progress
-              value={(5 - timeRemaining) * 20}
+              value={(2 - timeRemaining) * 50} // Adjusted for 2 seconds instead of 5
               className="h-1"
               aria-label={`Checking database, ${timeRemaining} seconds remaining`}
             />

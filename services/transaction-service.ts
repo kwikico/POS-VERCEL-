@@ -13,6 +13,11 @@ export async function saveTransaction(transaction: Transaction): Promise<Service
       timestamp: transaction.timestamp.toISOString(),
       payment_method: transaction.paymentMethod,
       is_return: transaction.isReturn,
+      // Include discount information if available
+      discount_type: transaction.discount?.type || null,
+      discount_value: transaction.discount?.value || null,
+      discount_description: transaction.discount?.description || null,
+      // Don't include discount_amount as it's not in the schema
     }
 
     // First, insert the transaction record with only the guaranteed fields
@@ -25,8 +30,11 @@ export async function saveTransaction(transaction: Transaction): Promise<Service
       }
     }
 
+    // Ensure items is an array
+    const items = Array.isArray(transaction.items) ? transaction.items : []
+
     // Then, insert all transaction items
-    const transactionItems = transaction.items.map((item) => ({
+    const transactionItems = items.map((item) => ({
       transaction_id: transaction.id,
       product_id: item.product.id,
       product_name: item.product.name,
@@ -82,7 +90,10 @@ export async function getTransactions(startDate?: Date, endDate?: Date): Promise
 
     // Transform the data to match our Transaction type
     const transactions = data.map((tx) => {
-      const items = tx.items.map((item: any) => ({
+      // Ensure items is an array
+      const txItems = Array.isArray(tx.items) ? tx.items : []
+
+      const items = txItems.map((item: any) => ({
         product: {
           id: item.product_id,
           name: item.product_name,
@@ -95,13 +106,22 @@ export async function getTransactions(startDate?: Date, endDate?: Date): Promise
 
       // Build discount object if discount data exists
       let discount: Discount | undefined
+      let discountAmount: number | undefined = undefined
+
       if (tx.discount_type && tx.discount_value) {
         discount = {
-          type: tx.discount_type,
+          type: tx.discount_type as "percentage" | "fixed",
           value: tx.discount_value,
           description:
             tx.discount_description ||
             `${tx.discount_type === "percentage" ? tx.discount_value + "%" : "$" + tx.discount_value} discount`,
+        }
+
+        // Calculate discount amount since it's not stored in the database
+        if (discount.type === "percentage") {
+          discountAmount = (tx.subtotal * discount.value) / 100
+        } else {
+          discountAmount = discount.value
         }
       }
 
@@ -110,7 +130,7 @@ export async function getTransactions(startDate?: Date, endDate?: Date): Promise
         items,
         subtotal: tx.subtotal,
         discount,
-        discountAmount: tx.discount_amount,
+        discountAmount,
         tax: tx.tax,
         total: tx.total,
         timestamp: new Date(tx.timestamp),
@@ -129,7 +149,7 @@ export async function getTransactions(startDate?: Date, endDate?: Date): Promise
   }
 }
 
-export async function getRecentTransactions(limit = 10): Promise<ServiceResponse<Transaction[]>> {
+export async function getRecentTransactions(limit = 10): Promise<Transaction[]> {
   try {
     const { data, error } = await supabase
       .from("transactions")
@@ -141,15 +161,16 @@ export async function getRecentTransactions(limit = 10): Promise<ServiceResponse
       .limit(limit)
 
     if (error) {
-      return {
-        data: [],
-        error: createError(ErrorType.DATABASE, "Failed to fetch recent transactions", error, 500),
-      }
+      console.error("Failed to fetch recent transactions:", error)
+      return []
     }
 
     // Transform the data to match our Transaction type
     const transactions = data.map((tx) => {
-      const items = tx.items.map((item: any) => ({
+      // Ensure items is an array
+      const txItems = Array.isArray(tx.items) ? tx.items : []
+
+      const items = txItems.map((item: any) => ({
         product: {
           id: item.product_id,
           name: item.product_name,
@@ -162,13 +183,22 @@ export async function getRecentTransactions(limit = 10): Promise<ServiceResponse
 
       // Build discount object if discount data exists
       let discount: Discount | undefined
+      let discountAmount: number | undefined = undefined
+
       if (tx.discount_type && tx.discount_value) {
         discount = {
-          type: tx.discount_type,
+          type: tx.discount_type as "percentage" | "fixed",
           value: tx.discount_value,
           description:
             tx.discount_description ||
             `${tx.discount_type === "percentage" ? tx.discount_value + "%" : "$" + tx.discount_value} discount`,
+        }
+
+        // Calculate discount amount since it's not stored in the database
+        if (discount.type === "percentage") {
+          discountAmount = (tx.subtotal * discount.value) / 100
+        } else {
+          discountAmount = discount.value
         }
       }
 
@@ -177,7 +207,7 @@ export async function getRecentTransactions(limit = 10): Promise<ServiceResponse
         items,
         subtotal: tx.subtotal,
         discount,
-        discountAmount: tx.discount_amount,
+        discountAmount,
         tax: tx.tax,
         total: tx.total,
         timestamp: new Date(tx.timestamp),
@@ -187,18 +217,16 @@ export async function getRecentTransactions(limit = 10): Promise<ServiceResponse
       } as Transaction
     })
 
-    return { data: transactions, error: null }
+    return transactions
   } catch (error) {
-    return {
-      data: [],
-      error: handleError(error, "Failed to fetch recent transactions"),
-    }
+    console.error("Error in getRecentTransactions:", error)
+    return []
   }
 }
 
-export async function updateTransaction(transaction: Transaction): Promise<ServiceResponse<boolean>> {
+export async function updateTransaction(transaction: Transaction): Promise<boolean> {
   try {
-    // Prepare transaction data for update
+    // Prepare transaction data for update, excluding discount_amount which doesn't exist in the schema
     const transactionData = {
       subtotal: transaction.subtotal,
       tax: transaction.tax,
@@ -210,7 +238,7 @@ export async function updateTransaction(transaction: Transaction): Promise<Servi
       discount_type: transaction.discount?.type || null,
       discount_value: transaction.discount?.value || null,
       discount_description: transaction.discount?.description || null,
-      discount_amount: transaction.discountAmount || null,
+      // Remove discount_amount as it's not in the schema
     }
 
     // Update the transaction record
@@ -220,10 +248,8 @@ export async function updateTransaction(transaction: Transaction): Promise<Servi
       .eq("id", transaction.id)
 
     if (transactionError) {
-      return {
-        data: null,
-        error: createError(ErrorType.DATABASE, "Failed to update transaction", transactionError, 500),
-      }
+      console.error("Failed to update transaction:", transactionError)
+      return false
     }
 
     // Delete existing transaction items
@@ -233,14 +259,15 @@ export async function updateTransaction(transaction: Transaction): Promise<Servi
       .eq("transaction_id", transaction.id)
 
     if (deleteItemsError) {
-      return {
-        data: null,
-        error: createError(ErrorType.DATABASE, "Failed to delete existing transaction items", deleteItemsError, 500),
-      }
+      console.error("Failed to delete existing transaction items:", deleteItemsError)
+      return false
     }
 
+    // Ensure items is an array
+    const items = Array.isArray(transaction.items) ? transaction.items : []
+
     // Insert updated transaction items
-    const transactionItems = transaction.items.map((item) => ({
+    const transactionItems = items.map((item) => ({
       transaction_id: transaction.id,
       product_id: item.product.id,
       product_name: item.product.name,
@@ -252,18 +279,14 @@ export async function updateTransaction(transaction: Transaction): Promise<Servi
     const { error: itemsError } = await supabase.from("transaction_items").insert(transactionItems)
 
     if (itemsError) {
-      return {
-        data: null,
-        error: createError(ErrorType.DATABASE, "Failed to save updated transaction items", itemsError, 500),
-      }
+      console.error("Failed to save updated transaction items:", itemsError)
+      return false
     }
 
-    return { data: true, error: null }
+    return true
   } catch (error) {
-    return {
-      data: null,
-      error: handleError(error, "Failed to update transaction"),
-    }
+    console.error("Error in updateTransaction:", error)
+    return false
   }
 }
 

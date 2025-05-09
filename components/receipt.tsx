@@ -51,6 +51,9 @@ interface ReceiptProps {
 }
 
 export default function Receipt({ receipt, onStartNewTransaction }: ReceiptProps) {
+  // Ensure receipt.items is always an array
+  const safeReceiptItems = Array.isArray(receipt.items) ? receipt.items : []
+
   const [activeTab, setActiveTab] = useState<"current" | "history">("current")
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -74,7 +77,8 @@ export default function Receipt({ receipt, onStartNewTransaction }: ReceiptProps
     setIsLoading(true)
     try {
       const recentTransactions = await getRecentTransactions(10)
-      setTransactions(recentTransactions)
+      // Ensure we always set an array
+      setTransactions(Array.isArray(recentTransactions) ? recentTransactions : [])
     } catch (error) {
       console.error("Failed to load transactions:", error)
       toast({
@@ -82,6 +86,8 @@ export default function Receipt({ receipt, onStartNewTransaction }: ReceiptProps
         description: "Failed to load transaction history.",
         variant: "destructive",
       })
+      // Set to empty array in case of error
+      setTransactions([])
     } finally {
       setIsLoading(false)
     }
@@ -92,14 +98,24 @@ export default function Receipt({ receipt, onStartNewTransaction }: ReceiptProps
   }
 
   const handleSelectTransaction = (transaction: Transaction) => {
-    setSelectedTransaction(transaction)
+    // Ensure transaction has an items array
+    const safeTransaction = {
+      ...transaction,
+      items: Array.isArray(transaction.items) ? transaction.items : [],
+    }
+    setSelectedTransaction(safeTransaction)
     setEditedTransaction(null)
     setIsEditing(false)
   }
 
   const handleEditTransaction = (transaction: Transaction) => {
-    setSelectedTransaction(transaction)
-    setEditedTransaction({ ...transaction })
+    // Ensure transaction has an items array
+    const safeTransaction = {
+      ...transaction,
+      items: Array.isArray(transaction.items) ? transaction.items : [],
+    }
+    setSelectedTransaction(safeTransaction)
+    setEditedTransaction(safeTransaction)
     setIsEditing(true)
   }
 
@@ -165,10 +181,13 @@ export default function Receipt({ receipt, onStartNewTransaction }: ReceiptProps
         description: `${discountType === "percentage" ? parsedValue + "%" : "$" + parsedValue.toFixed(2)} discount`,
       }
 
+      // Calculate the discount amount
+      const calculatedDiscountAmount = discountType === "percentage" ? (subtotal * parsedValue) / 100 : parsedValue
+
       setEditedTransaction({
         ...editedTransaction,
         discount: newDiscount,
-        discountAmount: discountType === "percentage" ? (subtotal * parsedValue) / 100 : parsedValue,
+        discountAmount: calculatedDiscountAmount,
       })
 
       setIsDiscountDialogOpen(false)
@@ -214,7 +233,7 @@ export default function Receipt({ receipt, onStartNewTransaction }: ReceiptProps
       const updatedTransaction = {
         ...editedTransaction,
         subtotal,
-        discountAmount,
+        discountAmount, // This is used in the UI but not sent to the database
         tax,
         total: editedTransaction.isReturn ? -total : total,
       }
@@ -255,7 +274,7 @@ export default function Receipt({ receipt, onStartNewTransaction }: ReceiptProps
   // Convert the receipt to a Transaction object for consistency
   const receiptAsTransaction: Transaction = {
     id: receipt.transactionId,
-    items: receipt.items,
+    items: safeReceiptItems,
     subtotal: receipt.subtotal,
     discount: receipt.discount,
     discountAmount: receipt.discountAmount,
@@ -268,11 +287,13 @@ export default function Receipt({ receipt, onStartNewTransaction }: ReceiptProps
   }
 
   // Filter transactions based on search query
-  const filteredTransactions = transactions.filter(
-    (tx) =>
-      tx.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      tx.paymentMethod.toLowerCase().includes(searchQuery.toLowerCase()),
-  )
+  const filteredTransactions = Array.isArray(transactions)
+    ? transactions.filter(
+        (tx) =>
+          tx.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          tx.paymentMethod.toLowerCase().includes(searchQuery.toLowerCase()),
+      )
+    : []
 
   // Calculate totals for edited transaction
   const calculateTotals = () => {
@@ -355,7 +376,7 @@ export default function Receipt({ receipt, onStartNewTransaction }: ReceiptProps
               <Separator className="my-4" />
 
               <div className="space-y-2">
-                {receipt.items.map((item, index) => (
+                {safeReceiptItems.map((item, index) => (
                   <div key={index} className="flex justify-between">
                     <div>
                       <span className="font-medium">{item.product.name}</span>
@@ -461,7 +482,8 @@ export default function Receipt({ receipt, onStartNewTransaction }: ReceiptProps
                           <div className="flex justify-between items-center">
                             <div>
                               <div className="text-sm">
-                                <span className="text-slate-500">Items:</span> {transaction.items.length}
+                                <span className="text-slate-500">Items:</span>{" "}
+                                {Array.isArray(transaction.items) ? transaction.items.length : 0}
                               </div>
                               <div className="text-sm">
                                 <span className="text-slate-500">Total:</span>{" "}
@@ -738,19 +760,20 @@ export default function Receipt({ receipt, onStartNewTransaction }: ReceiptProps
                         <div className="col-span-2 text-right">Total</div>
                       </div>
                       <div className="divide-y divide-slate-200 max-h-[200px] overflow-y-auto">
-                        {selectedTransaction.items.map((item, index) => (
-                          <div key={index} className="grid grid-cols-12 p-2">
-                            <div className="col-span-6">
-                              <div>{item.product.name}</div>
-                              <div className="text-xs text-slate-500">{item.product.category}</div>
+                        {Array.isArray(selectedTransaction.items) &&
+                          selectedTransaction.items.map((item, index) => (
+                            <div key={index} className="grid grid-cols-12 p-2">
+                              <div className="col-span-6">
+                                <div>{item.product.name}</div>
+                                <div className="text-xs text-slate-500">{item.product.category}</div>
+                              </div>
+                              <div className="col-span-2 text-right">{formatCurrency(item.product.price)}</div>
+                              <div className="col-span-2 text-right">{item.quantity}</div>
+                              <div className="col-span-2 text-right font-medium">
+                                {formatCurrency(item.product.price * item.quantity)}
+                              </div>
                             </div>
-                            <div className="col-span-2 text-right">{formatCurrency(item.product.price)}</div>
-                            <div className="col-span-2 text-right">{item.quantity}</div>
-                            <div className="col-span-2 text-right font-medium">
-                              {formatCurrency(item.product.price * item.quantity)}
-                            </div>
-                          </div>
-                        ))}
+                          ))}
                       </div>
                     </div>
 

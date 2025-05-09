@@ -29,9 +29,8 @@ export function useTransactionsData() {
           })
         }
 
-        if (fetchedTransactions) {
-          setTransactions(fetchedTransactions)
-        }
+        // Ensure we always set an array, even if fetchedTransactions is null or undefined
+        setTransactions(Array.isArray(fetchedTransactions) ? fetchedTransactions : [])
       } catch (error) {
         console.error("Unexpected error in useTransactionsData:", error)
         setError("An unexpected error occurred while loading transaction history")
@@ -41,6 +40,9 @@ export function useTransactionsData() {
           description: "Failed to load transaction history.",
           variant: "destructive",
         })
+
+        // Ensure we reset to an empty array in case of error
+        setTransactions([])
       } finally {
         setIsLoading(false)
       }
