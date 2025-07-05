@@ -10,7 +10,7 @@ export async function saveTransaction(transaction: Transaction): Promise<Service
       subtotal: transaction.subtotal,
       tax: transaction.tax,
       total: transaction.total,
-      timestamp: transaction.timestamp.toISOString(),
+      created_at: transaction.timestamp.toISOString(),
       payment_method: transaction.paymentMethod,
       is_return: transaction.isReturn,
       // Include discount information if available
@@ -63,30 +63,44 @@ export async function saveTransaction(transaction: Transaction): Promise<Service
 
 export async function getTransactions(startDate?: Date, endDate?: Date): Promise<ServiceResponse<Transaction[]>> {
   try {
+    console.log("🔍 Fetching transactions from database...")
+    console.log("Date range:", { startDate, endDate })
+
     let query = supabase
       .from("transactions")
       .select(`
         *,
         items:transaction_items(*)
       `)
-      .order("timestamp", { ascending: false })
+      .order("created_at", { ascending: false })
 
     if (startDate) {
-      query = query.gte("timestamp", startDate.toISOString())
+      query = query.gte("created_at", startDate.toISOString())
     }
 
     if (endDate) {
-      query = query.lte("timestamp", endDate.toISOString())
+      query = query.lte("created_at", endDate.toISOString())
     }
 
+    console.log("Executing query...")
     const { data, error } = await query
 
     if (error) {
+      console.error("❌ Database query failed:", error)
+      console.error("Error details:", {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
+      })
+
       return {
         data: [],
-        error: createError(ErrorType.DATABASE, "Failed to fetch transactions", error, 500),
+        error: createError(ErrorType.DATABASE, `Failed to fetch transactions: ${error.message}`, error, 500),
       }
     }
+
+    console.log(`✅ Successfully fetched ${data?.length || 0} transactions`)
 
     // Transform the data to match our Transaction type
     const transactions = data.map((tx) => {
@@ -133,7 +147,7 @@ export async function getTransactions(startDate?: Date, endDate?: Date): Promise
         discountAmount,
         tax: tx.tax,
         total: tx.total,
-        timestamp: new Date(tx.timestamp),
+        timestamp: new Date(tx.created_at),
         paymentMethod: tx.payment_method,
         isReturn: tx.is_return,
         taxApplied: tx.tax_applied !== undefined ? tx.tax_applied : true, // Default to true for backward compatibility
@@ -151,19 +165,29 @@ export async function getTransactions(startDate?: Date, endDate?: Date): Promise
 
 export async function getRecentTransactions(limit = 10): Promise<Transaction[]> {
   try {
+    console.log(`🔍 Fetching ${limit} recent transactions...`)
+
     const { data, error } = await supabase
       .from("transactions")
       .select(`
         *,
         items:transaction_items(*)
       `)
-      .order("timestamp", { ascending: false })
+      .order("created_at", { ascending: false })
       .limit(limit)
 
     if (error) {
-      console.error("Failed to fetch recent transactions:", error)
+      console.error("❌ Failed to fetch recent transactions:", error)
+      console.error("Error details:", {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
+      })
       return []
     }
+
+    console.log(`✅ Successfully fetched ${data?.length || 0} recent transactions`)
 
     // Transform the data to match our Transaction type
     const transactions = data.map((tx) => {
@@ -210,7 +234,7 @@ export async function getRecentTransactions(limit = 10): Promise<Transaction[]> 
         discountAmount,
         tax: tx.tax,
         total: tx.total,
-        timestamp: new Date(tx.timestamp),
+        timestamp: new Date(tx.created_at),
         paymentMethod: tx.payment_method,
         isReturn: tx.is_return,
         taxApplied: tx.tax_applied !== undefined ? tx.tax_applied : true,
@@ -231,7 +255,7 @@ export async function updateTransaction(transaction: Transaction): Promise<boole
       subtotal: transaction.subtotal,
       tax: transaction.tax,
       total: transaction.total,
-      timestamp: transaction.timestamp.toISOString(),
+      created_at: transaction.timestamp.toISOString(),
       payment_method: transaction.paymentMethod,
       is_return: transaction.isReturn,
       tax_applied: transaction.taxApplied,
@@ -304,8 +328,8 @@ export async function getDailyTransactionSummary(date: Date): Promise<{
     const { data, error } = await supabase
       .from("transactions")
       .select("total, is_return")
-      .gte("timestamp", startOfDay.toISOString())
-      .lte("timestamp", endOfDay.toISOString())
+      .gte("created_at", startOfDay.toISOString())
+      .lte("created_at", endOfDay.toISOString())
 
     if (error) {
       console.error("Error fetching daily transaction summary:", error)
