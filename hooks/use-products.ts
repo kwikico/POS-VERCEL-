@@ -79,17 +79,18 @@ export function useProducts() {
       // Set a new timeout to debounce saves
       saveTimeoutRef.current = setTimeout(async () => {
         try {
-          const { error } = await saveProducts(products)
-          if (error) {
-            console.error("Failed to save products:", error)
-            // Only show toast for non-initial saves to avoid duplicate errors
-            if (!needsSaveRef.current) {
-              toast({
-                title: "Warning",
-                description: "Changes may not be saved to the database",
-                variant: "destructive",
-              })
-            }
+          const res = await fetch("/api/products/bulk-upsert", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(products),
+          })
+          if (!res.ok) {
+            console.error("Failed to save products:", await res.text())
+            toast({
+              title: "Warning",
+              description: "Changes may not be saved to the database",
+              variant: "destructive",
+            })
           }
           // Reset the needs save flag
           needsSaveRef.current = false
