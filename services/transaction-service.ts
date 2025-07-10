@@ -1,6 +1,24 @@
 import { supabase } from "@/lib/supabase"
 import type { CartItem, Transaction, Discount } from "@/types/pos-types"
 import { type ServiceResponse, ErrorType, createError, handleError } from "@/lib/error-utils"
+import { updateProductStock } from "./stock-service"
+
+// --- helper --------------------------------------------------------------
+function attachPaymentDetails<T extends { id: string; payment_details?: any[] } & Record<string, any>>(
+  txRows: T[],
+  pdRows: any[],
+) {
+  const byTxId = pdRows.reduce<Record<string, any[]>>((acc, row) => {
+    ;(acc[row.transaction_id] ||= []).push(row)
+    return acc
+  }, {})
+
+  return txRows.map((row) => ({
+    ...row,
+    payment_details: byTxId[row.id] ?? [],
+  }))
+}
+// -------------------------------------------------------------------------
 
 export async function saveTransaction(transaction: Transaction): Promise<ServiceResponse<boolean>> {
   try {
@@ -13,14 +31,19 @@ export async function saveTransaction(transaction: Transaction): Promise<Service
       created_at: transaction.timestamp.toISOString(),
       payment_method: transaction.paymentMethod,
       is_return: transaction.isReturn,
+      tax_applied: transaction.taxApplied,
       // Include discount information if available
       discount_type: transaction.discount?.type || null,
       discount_value: transaction.discount?.value || null,
       discount_description: transaction.discount?.description || null,
-      // Don't include discount_amount as it's not in the schema
+      discount_amount: transaction.discountAmount || null,
+      // Include payment details
+      amount_tendered: transaction.amountTendered || null,
+      change_due: transaction.changeDue || null,
+      currency: transaction.currency || "CAD",
     }
 
-    // First, insert the transaction record with only the guaranteed fields
+    // First, insert the transaction record
     const { error: transactionError } = await supabase.from("transactions").insert(transactionData)
 
     if (transactionError) {
@@ -33,22 +56,43 @@ export async function saveTransaction(transaction: Transaction): Promise<Service
     // Ensure items is an array
     const items = Array.isArray(transaction.items) ? transaction.items : []
 
-    // Then, insert all transaction items
-    const transactionItems = items.map((item) => ({
-      transaction_id: transaction.id,
-      product_id: item.product.id,
-      product_name: item.product.name,
-      price: item.product.price,
-      quantity: item.quantity,
-      category: item.product.category,
-    }))
+    // Then, insert all transaction items and update stock
+    for (const item of items) {
+      const transactionItem = {
+        transaction_id: transaction.id,
+        product_id: item.product.id,
+        product_name: item.product.name,
+        price: item.product.price,
+        quantity: item.quantity,
+        category: item.product.category,
+      }
 
-    const { error: itemsError } = await supabase.from("transaction_items").insert(transactionItems)
+      const { error: itemError } = await supabase.from("transaction_items").insert(transactionItem)
 
-    if (itemsError) {
-      return {
-        data: null,
-        error: createError(ErrorType.DATABASE, "Failed to save transaction items", itemsError, 500),
+      if (itemError) {
+        console.error("Failed to save transaction item:", itemError)
+        // Continue with other items even if one fails
+      }
+
+      // Update product stock
+      const stockChange = transaction.isReturn ? item.quantity : -item.quantity
+      await updateProductStock(item.product.id, stockChange)
+    }
+
+    // Save payment details if they exist
+    if (transaction.paymentDetails && transaction.paymentDetails.length > 0) {
+      const paymentDetailsData = transaction.paymentDetails.map((detail) => ({
+        transaction_id: transaction.id,
+        payment_method: detail.method,
+        amount: detail.amount,
+        reference: detail.reference || null,
+      }))
+
+      const { error: paymentError } = await supabase.from("payment_details").insert(paymentDetailsData)
+
+      if (paymentError) {
+        console.error("Error saving payment details:", paymentError)
+        // Don't fail the transaction for payment detail errors
       }
     }
 
@@ -100,12 +144,22 @@ export async function getTransactions(startDate?: Date, endDate?: Date): Promise
       }
     }
 
-    console.log(`✅ Successfully fetched ${data?.length || 0} transactions`)
+    // Fetch payment details in bulk
+    const txIds = data?.map((t) => t.id) ?? []
+    let pdRows: any[] = []
+    if (txIds.length) {
+      const { data: pdData } = await supabase.from("payment_details").select("*").in("transaction_id", txIds)
+      pdRows = pdData ?? []
+    }
+    // Attach them to the main rows
+    const rowsWithPayments = attachPaymentDetails(data ?? [], pdRows)
+
+    console.log(`✅ Successfully fetched ${rowsWithPayments?.length || 0} transactions`)
 
     // Transform the data to match our Transaction type
-    const transactions = data.map((tx) => {
+    const transactions = rowsWithPayments.map((row) => {
       // Ensure items is an array
-      const txItems = Array.isArray(tx.items) ? tx.items : []
+      const txItems = Array.isArray(row.items) ? row.items : []
 
       const items = txItems.map((item: any) => ({
         product: {
@@ -122,35 +176,41 @@ export async function getTransactions(startDate?: Date, endDate?: Date): Promise
       let discount: Discount | undefined
       let discountAmount: number | undefined = undefined
 
-      if (tx.discount_type && tx.discount_value) {
+      if (row.discount_type && row.discount_value) {
         discount = {
-          type: tx.discount_type as "percentage" | "fixed",
-          value: tx.discount_value,
+          type: row.discount_type as "percentage" | "fixed",
+          value: row.discount_value,
           description:
-            tx.discount_description ||
-            `${tx.discount_type === "percentage" ? tx.discount_value + "%" : "$" + tx.discount_value} discount`,
+            row.discount_description ||
+            `${row.discount_type === "percentage" ? row.discount_value + "%" : "$" + row.discount_value} discount`,
         }
 
-        // Calculate discount amount since it's not stored in the database
-        if (discount.type === "percentage") {
-          discountAmount = (tx.subtotal * discount.value) / 100
-        } else {
-          discountAmount = discount.value
-        }
+        // Use stored discount amount or calculate it
+        discountAmount =
+          row.discount_amount ||
+          (discount.type === "percentage" ? (row.subtotal * discount.value) / 100 : discount.value)
       }
 
       return {
-        id: tx.id,
+        id: row.id,
         items,
-        subtotal: tx.subtotal,
+        subtotal: row.subtotal,
         discount,
         discountAmount,
-        tax: tx.tax,
-        total: tx.total,
-        timestamp: new Date(tx.created_at),
-        paymentMethod: tx.payment_method,
-        isReturn: tx.is_return,
-        taxApplied: tx.tax_applied !== undefined ? tx.tax_applied : true, // Default to true for backward compatibility
+        tax: row.tax,
+        total: row.total,
+        timestamp: new Date(row.created_at),
+        paymentMethod: row.payment_method,
+        isReturn: row.is_return,
+        taxApplied: row.tax_applied !== undefined ? row.tax_applied : true,
+        amountTendered: row.amount_tendered,
+        changeDue: row.change_due,
+        currency: row.currency,
+        paymentDetails: row.payment_details.map((pd: any) => ({
+          method: pd.payment_method,
+          amount: pd.amount,
+          reference: pd.reference,
+        })),
       } as Transaction
     })
 
@@ -187,12 +247,21 @@ export async function getRecentTransactions(limit = 10): Promise<Transaction[]> 
       return []
     }
 
-    console.log(`✅ Successfully fetched ${data?.length || 0} recent transactions`)
+    // Fetch payment details for the recent set
+    const ids = data?.map((t) => t.id) ?? []
+    let recentPd: any[] = []
+    if (ids.length) {
+      const { data: pdData } = await supabase.from("payment_details").select("*").in("transaction_id", ids)
+      recentPd = pdData ?? []
+    }
+    const rowsWithPayments = attachPaymentDetails(data ?? [], recentPd)
+
+    console.log(`✅ Successfully fetched ${rowsWithPayments?.length || 0} recent transactions`)
 
     // Transform the data to match our Transaction type
-    const transactions = data.map((tx) => {
+    const transactions = rowsWithPayments.map((row) => {
       // Ensure items is an array
-      const txItems = Array.isArray(tx.items) ? tx.items : []
+      const txItems = Array.isArray(row.items) ? row.items : []
 
       const items = txItems.map((item: any) => ({
         product: {
@@ -209,35 +278,41 @@ export async function getRecentTransactions(limit = 10): Promise<Transaction[]> 
       let discount: Discount | undefined
       let discountAmount: number | undefined = undefined
 
-      if (tx.discount_type && tx.discount_value) {
+      if (row.discount_type && row.discount_value) {
         discount = {
-          type: tx.discount_type as "percentage" | "fixed",
-          value: tx.discount_value,
+          type: row.discount_type as "percentage" | "fixed",
+          value: row.discount_value,
           description:
-            tx.discount_description ||
-            `${tx.discount_type === "percentage" ? tx.discount_value + "%" : "$" + tx.discount_value} discount`,
+            row.discount_description ||
+            `${row.discount_type === "percentage" ? row.discount_value + "%" : "$" + row.discount_value} discount`,
         }
 
-        // Calculate discount amount since it's not stored in the database
-        if (discount.type === "percentage") {
-          discountAmount = (tx.subtotal * discount.value) / 100
-        } else {
-          discountAmount = discount.value
-        }
+        // Use stored discount amount or calculate it
+        discountAmount =
+          row.discount_amount ||
+          (discount.type === "percentage" ? (row.subtotal * discount.value) / 100 : discount.value)
       }
 
       return {
-        id: tx.id,
+        id: row.id,
         items,
-        subtotal: tx.subtotal,
+        subtotal: row.subtotal,
         discount,
         discountAmount,
-        tax: tx.tax,
-        total: tx.total,
-        timestamp: new Date(tx.created_at),
-        paymentMethod: tx.payment_method,
-        isReturn: tx.is_return,
-        taxApplied: tx.tax_applied !== undefined ? tx.tax_applied : true,
+        tax: row.tax,
+        total: row.total,
+        timestamp: new Date(row.created_at),
+        paymentMethod: row.payment_method,
+        isReturn: row.is_return,
+        taxApplied: row.tax_applied !== undefined ? row.tax_applied : true,
+        amountTendered: row.amount_tendered,
+        changeDue: row.change_due,
+        currency: row.currency,
+        paymentDetails: row.payment_details.map((pd: any) => ({
+          method: pd.payment_method,
+          amount: pd.amount,
+          reference: pd.reference,
+        })),
       } as Transaction
     })
 
@@ -250,7 +325,7 @@ export async function getRecentTransactions(limit = 10): Promise<Transaction[]> 
 
 export async function updateTransaction(transaction: Transaction): Promise<boolean> {
   try {
-    // Prepare transaction data for update, excluding discount_amount which doesn't exist in the schema
+    // Prepare transaction data for update
     const transactionData = {
       subtotal: transaction.subtotal,
       tax: transaction.tax,
@@ -262,7 +337,10 @@ export async function updateTransaction(transaction: Transaction): Promise<boole
       discount_type: transaction.discount?.type || null,
       discount_value: transaction.discount?.value || null,
       discount_description: transaction.discount?.description || null,
-      // Remove discount_amount as it's not in the schema
+      discount_amount: transaction.discountAmount || null,
+      amount_tendered: transaction.amountTendered || null,
+      change_due: transaction.changeDue || null,
+      currency: transaction.currency || "CAD",
     }
 
     // Update the transaction record

@@ -1,7 +1,6 @@
 "use client"
 
 import type React from "react"
-
 import { useState, useCallback, useRef, useEffect } from "react"
 import NavigationBar from "@/components/navigation-bar"
 import ContentContainer from "@/components/content-container"
@@ -10,6 +9,7 @@ import ShoppingCart from "@/components/shopping-cart"
 import Receipt from "@/components/receipt"
 import Reports from "@/components/reports"
 import InventoryManagement from "@/components/inventory-management"
+import ProductReporting from "@/components/product-reporting"
 import ManualEntryModal from "@/components/manual-entry-modal"
 import BarcodeInput from "@/components/barcode-input"
 import ProductNotFoundModal from "@/components/product-not-found-modal"
@@ -58,6 +58,10 @@ export default function POSSystem() {
     removeDiscount,
     completeTransaction,
     resetTransaction,
+    getSubtotal,
+    getDiscountAmount,
+    getTax,
+    getTotal,
   } = useTransaction()
 
   // Update the ref when scannedBarcode changes
@@ -66,30 +70,11 @@ export default function POSSystem() {
   }, [scannedBarcode])
 
   // Handle keyboard shortcuts for global app actions
-  useKeyboardShortcut(
-    {
-      f1: () => setActiveTab("pos"),
-      f2: () => setActiveTab("reports"),
-      f3: () => setActiveTab("inventory"),
-      f4: () => receipt && setActiveTab("receipt"),
-      n: () => {
-        if (activeTab === "pos" && !isProductNotFoundOpen && !isManualEntryOpen) {
-          openManualEntry()
-        }
-      },
-      c: () => {
-        if (activeTab === "pos" && cart.length > 0) {
-          clearCart()
-          toast({
-            title: "Cart cleared",
-            description: "All items have been removed from the cart",
-            duration: TOAST_DURATION,
-          })
-        }
-      },
-    },
-    [activeTab, cart.length, receipt, clearCart, isProductNotFoundOpen, isManualEntryOpen],
-  )
+  useKeyboardShortcut("F1", () => setActiveTab("pos"))
+  useKeyboardShortcut("F2", () => setActiveTab("reports"))
+  useKeyboardShortcut("F3", () => setActiveTab("inventory"))
+  useKeyboardShortcut("F4", () => receipt && setActiveTab("receipt"))
+  useKeyboardShortcut("F5", () => setActiveTab("product-reports"))
 
   const handleAddToCart = useCallback(
     (product: Product) => {
@@ -419,81 +404,102 @@ export default function POSSystem() {
         />
 
         <main className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8 space-y-6">
-          <ContentContainer isActive={activeTab === "pos"}>
-            {/* Barcode Scanner - only show on POS tab */}
-            <div className="mb-4">
-              <BarcodeInput
-                onBarcodeSubmit={handleBarcodeSubmit}
-                isActive={activeTab === "pos" && !isProductNotFoundOpen && !isManualEntryOpen}
-              />
-            </div>
-
-            <div className="flex flex-col md:flex-row gap-4">
-              {/* Shopping Cart - 40% width */}
-              <div className="md:w-[40%]">
-                <ErrorBoundary
-                  onError={handleError}
-                  fallback={
-                    <div className="bg-red-50 p-4 rounded-md border border-red-200 h-full">
-                      <h3 className="text-red-600 font-medium mb-2">Cart Error</h3>
-                      <p className="text-sm text-slate-700">
-                        There was a problem loading the shopping cart. Try refreshing the page.
-                      </p>
-                    </div>
-                  }
-                >
-                  <ShoppingCart
-                    cart={cart}
-                    onUpdateQuantity={updateQuantity}
-                    onRemoveItem={removeFromCart}
-                    onClearCart={clearCart}
-                    onCheckout={handleCompleteTransaction}
-                    onOpenManualEntry={openManualEntry}
-                    taxEnabled={taxEnabled}
-                    onTaxToggle={toggleTax}
-                    discount={discount}
-                    onApplyDiscount={applyDiscount}
-                    onRemoveDiscount={removeDiscount}
-                  />
-                </ErrorBoundary>
+          {/* POS Tab Content */}
+          {activeTab === "pos" && (
+            <ContentContainer isActive={true}>
+              {/* Barcode Scanner - only show on POS tab */}
+              <div className="mb-4">
+                <BarcodeInput
+                  onBarcodeSubmit={handleBarcodeSubmit}
+                  isActive={!isProductNotFoundOpen && !isManualEntryOpen}
+                />
               </div>
 
-              {/* Product Catalog - 60% width */}
-              <div className="md:w-[60%]">
-                <ErrorBoundary
-                  onError={handleError}
-                  fallback={
-                    <div className="bg-red-50 p-4 rounded-md border border-red-200 h-full">
-                      <h3 className="text-red-600 font-medium mb-2">Product Catalog Error</h3>
-                      <p className="text-sm text-slate-700">
-                        There was a problem loading the product catalog. Try refreshing the page.
-                      </p>
-                    </div>
-                  }
-                >
-                  <ProductCatalog products={products} onAddToCart={handleAddToCart} isLoading={productsLoading} />
-                </ErrorBoundary>
+              <div className="flex flex-col md:flex-row gap-4">
+                {/* Shopping Cart - 40% width */}
+                <div className="md:w-[40%]">
+                  <ErrorBoundary
+                    onError={handleError}
+                    fallback={
+                      <div className="bg-red-50 p-4 rounded-md border border-red-200 h-full">
+                        <h3 className="text-red-600 font-medium mb-2">Cart Error</h3>
+                        <p className="text-sm text-slate-700">
+                          There was a problem loading the shopping cart. Try refreshing the page.
+                        </p>
+                      </div>
+                    }
+                  >
+                    <ShoppingCart
+                      cart={cart}
+                      onUpdateQuantity={updateQuantity}
+                      onRemoveItem={removeFromCart}
+                      onClearCart={clearCart}
+                      onCheckout={handleCompleteTransaction}
+                      onOpenManualEntry={openManualEntry}
+                      taxEnabled={taxEnabled}
+                      onTaxToggle={toggleTax}
+                      discount={discount}
+                      onApplyDiscount={applyDiscount}
+                      onRemoveDiscount={removeDiscount}
+                    />
+                  </ErrorBoundary>
+                </div>
+
+                {/* Product Catalog - 60% width */}
+                <div className="md:w-[60%]">
+                  <ErrorBoundary
+                    onError={handleError}
+                    fallback={
+                      <div className="bg-red-50 p-4 rounded-md border border-red-200 h-full">
+                        <h3 className="text-red-600 font-medium mb-2">Product Catalog Error</h3>
+                        <p className="text-sm text-slate-700">
+                          There was a problem loading the product catalog. Try refreshing the page.
+                        </p>
+                      </div>
+                    }
+                  >
+                    <ProductCatalog products={products} onAddToCart={handleAddToCart} isLoading={productsLoading} />
+                  </ErrorBoundary>
+                </div>
               </div>
-            </div>
-          </ContentContainer>
+            </ContentContainer>
+          )}
 
-          <ContentContainer isActive={activeTab === "reports"}>
-            <ErrorBoundary onError={handleError}>
-              <Reports transactions={transactions} />
-            </ErrorBoundary>
-          </ContentContainer>
+          {/* Reports Tab Content */}
+          {activeTab === "reports" && (
+            <ContentContainer isActive={true}>
+              <ErrorBoundary onError={handleError}>
+                <Reports transactions={transactions} />
+              </ErrorBoundary>
+            </ContentContainer>
+          )}
 
-          <ContentContainer isActive={activeTab === "inventory"}>
-            <ErrorBoundary onError={handleError}>
-              <InventoryManagement products={products} onProductsChange={updateProducts} />
-            </ErrorBoundary>
-          </ContentContainer>
+          {/* Inventory Tab Content */}
+          {activeTab === "inventory" && (
+            <ContentContainer isActive={true}>
+              <ErrorBoundary onError={handleError}>
+                <InventoryManagement products={products} onProductsChange={updateProducts} />
+              </ErrorBoundary>
+            </ContentContainer>
+          )}
 
-          <ContentContainer isActive={activeTab === "receipt"}>
-            <ErrorBoundary onError={handleError}>
-              {receipt && <Receipt receipt={receipt} onStartNewTransaction={handleStartNewTransaction} />}
-            </ErrorBoundary>
-          </ContentContainer>
+          {/* Product Reports Tab Content */}
+          {activeTab === "product-reports" && (
+            <ContentContainer isActive={true}>
+              <ErrorBoundary onError={handleError}>
+                <ProductReporting products={products} onProductsChange={updateProducts} />
+              </ErrorBoundary>
+            </ContentContainer>
+          )}
+
+          {/* Receipt Tab Content */}
+          {activeTab === "receipt" && (
+            <ContentContainer isActive={true}>
+              <ErrorBoundary onError={handleError}>
+                {receipt && <Receipt receipt={receipt} onStartNewTransaction={handleStartNewTransaction} />}
+              </ErrorBoundary>
+            </ContentContainer>
+          )}
         </main>
       </ErrorBoundary>
 

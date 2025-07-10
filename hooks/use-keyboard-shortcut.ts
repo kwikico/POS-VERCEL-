@@ -1,73 +1,77 @@
 "use client"
 
-import type React from "react"
+import { useEffect, useCallback } from "react"
 
-import { useEffect, useRef } from "react"
+interface KeyboardShortcutOptions {
+  preventDefault?: boolean
+  stopPropagation?: boolean
+  enabled?: boolean
+}
 
-type KeyHandler = (e: KeyboardEvent) => void
-type KeyMap = Record<string, KeyHandler>
-
-/**
- * Hook to manage keyboard shortcuts
- * @param keyMap Object mapping key names to handler functions
- * @param deps Dependencies array to control when shortcuts are refreshed
- * @param options Configuration options
- */
 export function useKeyboardShortcut(
-  keyMap: KeyMap,
-  deps: React.DependencyList = [],
-  options: {
-    enabled?: boolean
-    preventDefault?: boolean
-    ignoreInputFields?: boolean
-    ignoreModifiers?: boolean
-  } = {},
+  keys: string | string[],
+  callback: (event: KeyboardEvent) => void,
+  options: KeyboardShortcutOptions = {},
+  deps: any[] = [],
 ) {
-  const { enabled = true, preventDefault = true, ignoreInputFields = true, ignoreModifiers = false } = options
+  const { preventDefault = true, stopPropagation = false, enabled = true } = options
 
-  // Store keyMap in a ref to prevent recreating the handler on every render
-  const keyMapRef = useRef<KeyMap>(keyMap)
+  const handleKeyPress = useCallback(
+    (event: KeyboardEvent) => {
+      if (!enabled) return
 
-  // Update the ref when keyMap changes
-  useEffect(() => {
-    keyMapRef.current = keyMap
-  }, [keyMap])
+      const targetKeys = Array.isArray(keys) ? keys : [keys]
+      const pressedKey = event.key
+
+      // Check for modifier keys
+      const hasCtrl = event.ctrlKey || event.metaKey
+      const hasShift = event.shiftKey
+      const hasAlt = event.altKey
+
+      const matchesShortcut = targetKeys.some((key) => {
+        // Handle simple keys
+        if (key === pressedKey) return true
+
+        // Handle modifier combinations
+        if (key.includes("+")) {
+          const parts = key.split("+").map((part) => part.trim().toLowerCase())
+          const keyPart = parts[parts.length - 1]
+          const modifiers = parts.slice(0, -1)
+
+          if (pressedKey.toLowerCase() !== keyPart) return false
+
+          const needsCtrl = modifiers.includes("ctrl") || modifiers.includes("cmd")
+          const needsShift = modifiers.includes("shift")
+          const needsAlt = modifiers.includes("alt")
+
+          return (
+            (!needsCtrl || hasCtrl) &&
+            (!needsShift || hasShift) &&
+            (!needsAlt || hasAlt) &&
+            (needsCtrl ? hasCtrl : true) &&
+            (needsShift ? hasShift : true) &&
+            (needsAlt ? hasAlt : true)
+          )
+        }
+
+        return false
+      })
+
+      if (matchesShortcut) {
+        if (preventDefault) event.preventDefault()
+        if (stopPropagation) event.stopPropagation()
+        callback(event)
+      }
+    },
+    [keys, callback, preventDefault, stopPropagation, enabled, ...deps],
+  )
 
   useEffect(() => {
     if (!enabled) return
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if target is an input, textarea, or select unless configured otherwise
-      if (ignoreInputFields) {
-        const target = e.target as HTMLElement
-        if (
-          target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.tagName === "SELECT" ||
-          target.isContentEditable
-        ) {
-          return
-        }
-      }
-
-      // Ignore if modifier keys are pressed unless configured otherwise
-      if (ignoreModifiers && (e.ctrlKey || e.altKey || e.metaKey)) {
-        return
-      }
-
-      // Safely handle the key, ensuring it exists before calling toLowerCase()
-      const key = e.key ? e.key.toLowerCase() : ""
-      const handler = keyMapRef.current[key]
-
-      if (handler) {
-        if (preventDefault) {
-          e.preventDefault()
-        }
-        handler(e)
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [enabled, preventDefault, ignoreInputFields, ignoreModifiers, ...deps])
+    document.addEventListener("keydown", handleKeyPress)
+    return () => document.removeEventListener("keydown", handleKeyPress)
+  }, [handleKeyPress, enabled])
 }
+
+export default useKeyboardShortcut

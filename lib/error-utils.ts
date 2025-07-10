@@ -1,76 +1,64 @@
-import { toast } from "@/components/ui/use-toast"
+import type { ServiceError, ServiceResponse } from "@/types/pos-types"
 
-// Define error types for better error handling
 export enum ErrorType {
-  NETWORK = "network",
-  DATABASE = "database",
   VALIDATION = "validation",
-  AUTHENTICATION = "authentication",
-  AUTHORIZATION = "authorization",
+  DATABASE = "database",
+  NETWORK = "network",
   NOT_FOUND = "not_found",
+  PERMISSION = "permission",
   UNKNOWN = "unknown",
 }
 
-// Define a structured error response
-export interface ErrorResponse {
-  type: ErrorType
-  message: string
-  details?: any
-  status?: number
-}
-
-// Create a structured error
-export function createError(type: ErrorType, message: string, details?: any, status?: number): ErrorResponse {
+export function createError(type: ErrorType, message: string, details?: any, code?: number): ServiceError {
   return {
     type,
     message,
     details,
-    status,
+    code,
   }
 }
 
-// Handle errors and show toast notifications
-export function handleError(error: any, fallbackMessage = "An unexpected error occurred"): ErrorResponse {
-  console.error("Error:", error)
-
-  // Determine if it's a structured error or create one
-  const errorResponse: ErrorResponse = error.type
-    ? error
-    : createError(ErrorType.UNKNOWN, error.message || fallbackMessage, error, error.status || 500)
-
-  // Show toast notification with appropriate message
-  toast({
-    title: getErrorTitle(errorResponse.type),
-    description: errorResponse.message,
-    variant: "destructive",
-  })
-
-  return errorResponse
-}
-
-// Get user-friendly error titles based on error type
-function getErrorTitle(type: ErrorType): string {
-  switch (type) {
-    case ErrorType.NETWORK:
-      return "Network Error"
-    case ErrorType.DATABASE:
-      return "Database Error"
-    case ErrorType.VALIDATION:
-      return "Validation Error"
-    case ErrorType.AUTHENTICATION:
-      return "Authentication Error"
-    case ErrorType.AUTHORIZATION:
-      return "Authorization Error"
-    case ErrorType.NOT_FOUND:
-      return "Not Found"
-    case ErrorType.UNKNOWN:
-    default:
-      return "Error"
+export function handleError(error: unknown, defaultMessage: string): ServiceError {
+  if (error instanceof Error) {
+    return createError(ErrorType.UNKNOWN, error.message, error, 500)
   }
+
+  if (typeof error === "string") {
+    return createError(ErrorType.UNKNOWN, error, null, 500)
+  }
+
+  return createError(ErrorType.UNKNOWN, defaultMessage, error, 500)
 }
 
-// Type for service function responses
-export interface ServiceResponse<T> {
-  data: T | null
-  error: ErrorResponse | null
+export async function withRetry<T>(operation: () => Promise<T>, maxAttempts = 3, delay = 1000): Promise<T> {
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await operation()
+    } catch (error) {
+      lastError = error
+
+      if (attempt === maxAttempts) {
+        throw error
+      }
+
+      // Wait before retrying
+      await new Promise((resolve) => setTimeout(resolve, delay * attempt))
+    }
+  }
+
+  throw lastError
+}
+
+export function isServiceError(obj: any): obj is ServiceError {
+  return obj && typeof obj.type === "string" && typeof obj.message === "string"
+}
+
+export function createSuccessResponse<T>(data: T): ServiceResponse<T> {
+  return { data, error: null }
+}
+
+export function createErrorResponse<T>(error: ServiceError): ServiceResponse<T> {
+  return { data: null, error }
 }

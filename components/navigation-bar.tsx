@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { memo, useEffect, useState } from "react"
-import { ShoppingCartIcon, Package, BarChart3, CuboidIcon as Cube, ReceiptIcon } from "lucide-react"
+import { ShoppingCartIcon, Package, BarChart3, CuboidIcon as Cube, ReceiptIcon, TrendingUp } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface NavigationBarProps {
@@ -60,7 +60,7 @@ function NavigationBarComponent({ activeTab, onTabChange, onNewTransaction, hasR
           </div>
 
           {/* Center - Navigation buttons */}
-          <div className="flex items-center justify-center space-x-1 sm:space-x-3">
+          <div className="flex items-center justify-center space-x-1 sm:space-x-2">
             <NavButton
               icon={<Package className="h-4 w-4 sm:mr-2" />}
               label="Point of Sale"
@@ -71,10 +71,18 @@ function NavigationBarComponent({ activeTab, onTabChange, onNewTransaction, hasR
 
             <NavButton
               icon={<BarChart3 className="h-4 w-4 sm:mr-2" />}
-              label="Reports"
+              label="Sales Reports"
               isActive={activeTab === "reports"}
               onClick={() => handleTabChange("reports")}
               shortcut="F2"
+            />
+
+            <NavButton
+              icon={<TrendingUp className="h-4 w-4 sm:mr-2" />}
+              label="Product Reports"
+              isActive={activeTab === "product-reports"}
+              onClick={() => handleTabChange("product-reports")}
+              shortcut="F5"
             />
 
             <NavButton
@@ -121,7 +129,7 @@ function NavButton({ icon, label, isActive, isDisabled = false, onClick, shortcu
       onClick={onClick}
       disabled={isDisabled}
       className={cn(
-        "flex flex-col sm:flex-row items-center px-2 py-1 sm:px-4 sm:py-2 rounded-lg transition-colors relative",
+        "flex flex-col sm:flex-row items-center px-2 py-1 sm:px-3 sm:py-2 rounded-lg transition-colors relative text-xs sm:text-sm",
         isActive
           ? "bg-white/20 text-white"
           : isDisabled
@@ -130,9 +138,10 @@ function NavButton({ icon, label, isActive, isDisabled = false, onClick, shortcu
       )}
     >
       {icon}
-      <span className="text-xs sm:text-sm">{label}</span>
+      <span className="hidden sm:inline">{label}</span>
+      <span className="sm:hidden text-[10px] mt-1">{label.split(" ")[0]}</span>
       {shortcut && (
-        <span className="absolute -top-1 -right-1 text-[10px] bg-white/30 px-1 rounded hidden sm:block">
+        <span className="absolute -top-1 -right-1 text-[8px] sm:text-[10px] bg-white/30 px-1 rounded hidden sm:block">
           {shortcut}
         </span>
       )}

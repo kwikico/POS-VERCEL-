@@ -1,86 +1,81 @@
 "use client"
 
-import { useRef, useEffect } from "react"
+import { useEffect, useRef } from "react"
 
-// List of selectors for focusable elements
-const FOCUSABLE_ELEMENTS = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  "[tabindex]:not([tabindex='-1'])",
-  "details",
-  "summary",
-].join(", ")
+interface UseFocusTrapOptions {
+  enabled?: boolean
+  restoreFocus?: boolean
+}
 
-export function useFocusTrap(isActive = false) {
-  const containerRef = useRef<HTMLElement | null>(null)
-  const previousFocusRef = useRef<Element | null>(null)
+export function useFocusTrap(options: UseFocusTrapOptions = {}) {
+  const { enabled = true, restoreFocus = true } = options
+  const containerRef = useRef<HTMLElement>(null)
+  const previousActiveElement = useRef<Element | null>(null)
 
-  // Save the previously focused element and focus the first element in the modal
   useEffect(() => {
-    if (isActive && containerRef.current) {
-      // Save the currently focused element to restore later
-      previousFocusRef.current = document.activeElement
+    if (!enabled || !containerRef.current) return
 
-      // Find all focusable elements in the container
-      const focusableElements = containerRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_ELEMENTS)
+    const container = containerRef.current
+    previousActiveElement.current = document.activeElement
 
-      // Focus the first element if it exists
-      if (focusableElements.length > 0) {
-        setTimeout(() => {
-          focusableElements[0].focus()
-        }, 50)
-      }
+    // Get all focusable elements
+    const getFocusableElements = () => {
+      const focusableSelectors = [
+        "button:not([disabled])",
+        "input:not([disabled])",
+        "select:not([disabled])",
+        "textarea:not([disabled])",
+        "a[href]",
+        '[tabindex]:not([tabindex="-1"])',
+        '[contenteditable="true"]',
+      ].join(", ")
+
+      return Array.from(container.querySelectorAll(focusableSelectors)) as HTMLElement[]
     }
-
-    // Cleanup: restore focus when the modal is closed
-    return () => {
-      if (previousFocusRef.current instanceof HTMLElement) {
-        previousFocusRef.current.focus()
-      }
-    }
-  }, [isActive])
-
-  // Handle keyboard navigation (trap focus)
-  useEffect(() => {
-    if (!isActive) return
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Tab" || !containerRef.current) return
+      if (event.key !== "Tab") return
 
-      // Find all focusable elements in the container
-      const focusableElements = Array.from(
-        containerRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_ELEMENTS),
-      ).filter((el) => el.tabIndex !== -1)
-
+      const focusableElements = getFocusableElements()
       if (focusableElements.length === 0) return
 
-      // Get the first and last focusable elements
       const firstElement = focusableElements[0]
       const lastElement = focusableElements[focusableElements.length - 1]
 
-      // If shift+tab and the active element is the first element, move to the last element
-      if (event.shiftKey && document.activeElement === firstElement) {
-        lastElement.focus()
-        event.preventDefault()
-      }
-      // If tab and the active element is the last element, move to the first element
-      else if (!event.shiftKey && document.activeElement === lastElement) {
-        firstElement.focus()
-        event.preventDefault()
+      if (event.shiftKey) {
+        // Shift + Tab
+        if (document.activeElement === firstElement) {
+          event.preventDefault()
+          lastElement.focus()
+        }
+      } else {
+        // Tab
+        if (document.activeElement === lastElement) {
+          event.preventDefault()
+          firstElement.focus()
+        }
       }
     }
 
-    // Add event listener for keyboard navigation
-    document.addEventListener("keydown", handleKeyDown)
+    // Focus first element
+    const focusableElements = getFocusableElements()
+    if (focusableElements.length > 0) {
+      focusableElements[0].focus()
+    }
 
-    // Cleanup
+    container.addEventListener("keydown", handleKeyDown)
+
     return () => {
-      document.removeEventListener("keydown", handleKeyDown)
+      container.removeEventListener("keydown", handleKeyDown)
+
+      // Restore focus
+      if (restoreFocus && previousActiveElement.current instanceof HTMLElement) {
+        previousActiveElement.current.focus()
+      }
     }
-  }, [isActive])
+  }, [enabled, restoreFocus])
 
   return containerRef
 }
+
+export default useFocusTrap
