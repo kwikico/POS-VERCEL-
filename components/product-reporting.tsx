@@ -28,7 +28,6 @@ import {
 import {
   AlertTriangle,
   Package,
-  Settings,
   BellOff,
   Loader2,
   Download,
@@ -258,17 +257,31 @@ export default function ProductReporting({ products, onProductsChange }: Product
   const categories = Array.from(
     new Set(products.map((p) => p.category).filter((c): c is string => !!c && c.trim() !== "")),
   )
-  const trackingCategories = ["alcohol", "tobacco", "high-value", "controlled", "general"]
+  const trackingCategories = [
+    "alcohol",
+    "tobacco",
+    "high-value",
+    "controlled",
+    "general",
+    "food",
+    "electronics",
+    "clothing",
+    "health",
+    "household",
+  ]
 
   // Filter products based on search and selection
   const filteredProducts = useMemo(() => {
     return products.filter((product) => {
       const matchesSearch =
         product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        product.category.toLowerCase().includes(searchTerm.toLowerCase())
+        product.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (product.tags && product.tags.some((tag) => tag.toLowerCase().includes(searchTerm.toLowerCase())))
       const matchesCategory = selectedCategory === "all" || product.category === selectedCategory
       const matchesTracking =
-        selectedTrackingCategory === "all" || product.trackingCategory === selectedTrackingCategory
+        selectedTrackingCategory === "all" ||
+        (product.tags && product.tags.includes(selectedTrackingCategory)) ||
+        product.trackingCategory === selectedTrackingCategory
 
       return matchesSearch && matchesCategory && matchesTracking
     })
@@ -427,7 +440,7 @@ export default function ProductReporting({ products, onProductsChange }: Product
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2">
               <Package className="h-5 w-5" />
-              Advanced Product Analytics & Restocking Intelligence
+              Product Analytics
             </CardTitle>
             <div className="flex items-center gap-2">
               {stockAlerts.length > 0 && (
@@ -502,19 +515,25 @@ export default function ProductReporting({ products, onProductsChange }: Product
                 </Select>
               </div>
 
+              {/* Tracking Type */}
               <div className="space-y-2">
-                <Label htmlFor="tracking-category">Tracking Type</Label>
+                <Label htmlFor="tracking-tags">Product Tags</Label>
                 <Select value={selectedTrackingCategory} onValueChange={setSelectedTrackingCategory}>
-                  <SelectTrigger id="tracking-category">
-                    <SelectValue placeholder="All Types" />
+                  <SelectTrigger id="tracking-tags">
+                    <SelectValue placeholder="All Tags" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Types</SelectItem>
+                    <SelectItem value="all">All Tags</SelectItem>
                     <SelectItem value="alcohol">Alcohol</SelectItem>
                     <SelectItem value="tobacco">Tobacco</SelectItem>
                     <SelectItem value="high-value">High Value</SelectItem>
                     <SelectItem value="controlled">Controlled</SelectItem>
                     <SelectItem value="general">General</SelectItem>
+                    <SelectItem value="food">Food</SelectItem>
+                    <SelectItem value="electronics">Electronics</SelectItem>
+                    <SelectItem value="clothing">Clothing</SelectItem>
+                    <SelectItem value="health">Health & Beauty</SelectItem>
+                    <SelectItem value="household">Household</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -777,97 +796,123 @@ export default function ProductReporting({ products, onProductsChange }: Product
                     </div>
                   </div>
 
-                  {/* Product Grid */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {filteredProducts.map((product) => {
-                      const report = salesReports.find((r) => r.productId === product.id)
-                      const isSelected = selectedProducts.includes(product.id)
-                      const profitMargin =
-                        product.price && product.costPrice
-                          ? ((product.price - product.costPrice) / product.price) * 100
-                          : 0
+                  {/* Search Results */}
+                  {searchTerm && (
+                    <Card className="mb-4">
+                      <CardHeader>
+                        <CardTitle className="text-sm">Search Results for "{searchTerm}"</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="max-h-60 overflow-y-auto space-y-2">
+                          {filteredProducts.length > 0 ? (
+                            filteredProducts.map((product) => {
+                              const report = salesReports.find((r) => r.productId === product.id)
+                              const isSelected = selectedProducts.includes(product.id)
+                              const profitMargin =
+                                product.price && product.costPrice
+                                  ? ((product.price - product.costPrice) / product.price) * 100
+                                  : 0
 
-                      return (
-                        <Card
-                          key={product.id}
-                          className={`cursor-pointer transition-all ${
-                            isSelected ? "ring-2 ring-blue-500 bg-blue-50" : "hover:shadow-md"
-                          }`}
-                        >
-                          <CardContent className="p-4">
-                            <div className="flex items-start justify-between mb-3">
-                              <Checkbox
-                                checked={isSelected}
-                                onCheckedChange={(checked) => handleProductSelection(product.id, checked as boolean)}
-                              />
-                              <Badge variant="outline" className="text-xs">
-                                {product.category}
-                              </Badge>
-                            </div>
-
-                            <h3 className="font-semibold text-lg mb-2">{product.name}</h3>
-
-                            <div className="space-y-2 text-sm">
-                              <div className="flex justify-between">
-                                <span className="text-slate-600">Current Stock:</span>
-                                <span
-                                  className={`font-medium ${
-                                    (product.stock || 0) <= (product.minStockLevel || 0)
-                                      ? "text-red-600"
-                                      : "text-green-600"
+                              return (
+                                <div
+                                  key={product.id}
+                                  className={`flex items-center justify-between p-3 border rounded-lg cursor-pointer hover:bg-slate-50 ${
+                                    isSelected ? "bg-blue-50 border-blue-200" : "border-slate-200"
                                   }`}
+                                  onClick={() => handleProductSelection(product.id, !isSelected)}
                                 >
-                                  {product.stock || 0}
-                                </span>
-                              </div>
-
-                              <div className="flex justify-between">
-                                <span className="text-slate-600">Price:</span>
-                                <span className="font-medium">${product.price.toFixed(2)}</span>
-                              </div>
-
-                              {product.costPrice && (
-                                <div className="flex justify-between">
-                                  <span className="text-slate-600">Cost:</span>
-                                  <span className="font-medium">${product.costPrice.toFixed(2)}</span>
+                                  <div className="flex items-center space-x-3">
+                                    <Checkbox
+                                      checked={isSelected}
+                                      onCheckedChange={(checked) =>
+                                        handleProductSelection(product.id, checked as boolean)
+                                      }
+                                    />
+                                    <div>
+                                      <div className="font-medium">{product.name}</div>
+                                      <div className="text-sm text-slate-500">
+                                        {product.category} • Stock: {product.stock || 0} • ${product.price.toFixed(2)}
+                                        {product.tags &&
+                                          product.tags.length > 0 &&
+                                          ` • Tags: ${product.tags.join(", ")}`}
+                                        {report && ` • Sold: ${report.unitsSold}`}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="text-right">
+                                    <Badge variant="outline" className="text-xs">
+                                      {product.category}
+                                    </Badge>
+                                    {profitMargin > 0 && (
+                                      <div className="text-xs text-slate-500 mt-1">
+                                        {profitMargin.toFixed(1)}% margin
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
-                              )}
-
-                              {profitMargin > 0 && (
-                                <div className="flex justify-between">
-                                  <span className="text-slate-600">Margin:</span>
-                                  <span
-                                    className={`font-medium ${profitMargin > 20 ? "text-green-600" : "text-orange-600"}`}
-                                  >
-                                    {profitMargin.toFixed(1)}%
-                                  </span>
-                                </div>
-                              )}
-
-                              {report && (
-                                <div className="flex justify-between">
-                                  <span className="text-slate-600">Units Sold:</span>
-                                  <span className="font-medium">{report.unitsSold}</span>
-                                </div>
-                              )}
+                              )
+                            })
+                          ) : (
+                            <div className="text-center py-4 text-slate-500">
+                              No products found matching "{searchTerm}"
                             </div>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
 
-                            <div className="mt-3 pt-3 border-t">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => openStockSettings(product)}
-                                className="w-full"
+                  {/* Selected Products Summary */}
+                  {selectedProducts.length > 0 && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center justify-between">
+                          <span>Selected Products ({selectedProducts.length})</span>
+                          <Button variant="outline" size="sm" onClick={() => setSelectedProducts([])}>
+                            Clear All
+                          </Button>
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-2">
+                          {selectedProducts.map((productId) => {
+                            const product = products.find((p) => p.id === productId)
+                            const report = salesReports.find((r) => r.productId === productId)
+                            if (!product) return null
+
+                            return (
+                              <div
+                                key={productId}
+                                className="flex items-center justify-between p-2 bg-slate-50 rounded-lg"
                               >
-                                <Settings className="h-4 w-4 mr-2" />
-                                Configure
-                              </Button>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )
-                    })}
-                  </div>
+                                <div className="flex items-center space-x-2">
+                                  <span className="font-medium">{product.name}</span>
+                                  <Badge variant="outline" className="text-xs">
+                                    {product.category}
+                                  </Badge>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                  {report && (
+                                    <span className="text-sm text-slate-600">
+                                      {report.unitsSold} sold • ${report.totalRevenue.toFixed(2)}
+                                    </span>
+                                  )}
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleProductSelection(productId, false)}
+                                    className="h-6 w-6 p-0"
+                                  >
+                                    ×
+                                  </Button>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
                 </div>
               </TabsContent>
 
@@ -1117,10 +1162,10 @@ export default function ProductReporting({ products, onProductsChange }: Product
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="tracking-cat">Tracking Category</Label>
+                <Label htmlFor="tracking-cat">Product Tags</Label>
                 <Select value={trackingCategory} onValueChange={setTrackingCategory}>
                   <SelectTrigger id="tracking-cat">
-                    <SelectValue placeholder="Select tracking category" />
+                    <SelectValue placeholder="Select product tags" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="general">General</SelectItem>
@@ -1128,11 +1173,14 @@ export default function ProductReporting({ products, onProductsChange }: Product
                     <SelectItem value="tobacco">Tobacco</SelectItem>
                     <SelectItem value="high-value">High Value</SelectItem>
                     <SelectItem value="controlled">Controlled Substance</SelectItem>
+                    <SelectItem value="food">Food</SelectItem>
+                    <SelectItem value="electronics">Electronics</SelectItem>
+                    <SelectItem value="clothing">Clothing</SelectItem>
+                    <SelectItem value="health">Health & Beauty</SelectItem>
+                    <SelectItem value="household">Household</SelectItem>
                   </SelectContent>
                 </Select>
-                <div className="text-xs text-slate-500">
-                  Categorize this product for specialized tracking and reporting
-                </div>
+                <div className="text-xs text-slate-500">Tag this product for specialized tracking and reporting</div>
               </div>
             </div>
           )}
