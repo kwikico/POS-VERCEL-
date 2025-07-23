@@ -41,15 +41,16 @@ function transformProductFromDb(row: any): Product {
     trackingCategory: row.tracking_category,
     isTrackable: row.is_trackable || false,
     unitsSold: row.units_sold,
+    customPrice: row.custom_price || false,
     createdAt: row.created_at ? new Date(row.created_at) : new Date(),
     updatedAt: row.updated_at ? new Date(row.updated_at) : new Date(),
   }
 }
 
 // Transform Product to database format
-function transformProductToDb(product: Product) {
+function transformProductToDb(product: Product | Omit<Product, "id" | "createdAt" | "updatedAt">) {
   return {
-    id: product.id,
+    ...("id" in product && { id: product.id }),
     name: product.name,
     price: product.price,
     cost_price: product.costPrice,
@@ -65,13 +66,18 @@ function transformProductToDb(product: Product) {
     tracking_category: product.trackingCategory,
     is_trackable: product.isTrackable || false,
     units_sold: product.unitsSold || 0,
+    custom_price: product.customPrice || false,
     updated_at: new Date().toISOString(),
+    ...(!("id" in product) && { created_at: new Date().toISOString() }),
   }
 }
 
 // Optimized product service with caching and error handling
 export async function saveProducts(products: Product[]): Promise<ServiceResponse<boolean>> {
   try {
+    console.log("=== SAVE PRODUCTS SERVICE ===")
+    console.log("Products to save:", products.length)
+
     // Validate all products
     const validationErrors: string[] = []
     const validatedProducts = products
@@ -86,6 +92,7 @@ export async function saveProducts(products: Product[]): Promise<ServiceResponse
       .filter(Boolean) as Product[]
 
     if (validationErrors.length > 0) {
+      console.error("Validation errors:", validationErrors)
       return {
         data: null,
         error: createError(
@@ -99,18 +106,24 @@ export async function saveProducts(products: Product[]): Promise<ServiceResponse
 
     // Format products for Supabase
     const formattedProducts = validatedProducts.map(transformProductToDb)
+    console.log("Formatted products for DB:", formattedProducts)
 
     // Use retry mechanism for database operations
     const result = await withRetry(
       async () => {
         const { error } = await supabase.from("products").upsert(formattedProducts, { onConflict: "id" })
 
-        if (error) throw error
+        if (error) {
+          console.error("Supabase upsert error:", error)
+          throw error
+        }
         return true
       },
       3,
       1000,
     )
+
+    console.log("Save products result:", result)
 
     // Update cache
     cache.delete(cacheKeys.products())
@@ -126,6 +139,7 @@ export async function saveProducts(products: Product[]): Promise<ServiceResponse
 
     return { data: true, error: null }
   } catch (error) {
+    console.error("Save products service error:", error)
     return {
       data: null,
       error: handleError(error, "Failed to save products"),
@@ -135,11 +149,15 @@ export async function saveProducts(products: Product[]): Promise<ServiceResponse
 
 export async function getProducts(filters?: ProductFilters): Promise<ServiceResponse<Product[]>> {
   try {
+    console.log("=== GET PRODUCTS SERVICE ===")
+    console.log("Filters:", filters)
+
     // Check cache first
     const cacheKey = filters ? `products:filtered:${JSON.stringify(filters)}` : cacheKeys.products()
     const cachedProducts = cache.get<Product[]>(cacheKey)
 
     if (cachedProducts) {
+      console.log("Returning cached products:", cachedProducts.length)
       return { data: cachedProducts, error: null }
     }
 
@@ -193,6 +211,8 @@ export async function getProducts(filters?: ProductFilters): Promise<ServiceResp
       }
     }
 
+    console.log("Fetched products from DB:", data?.length || 0)
+
     // Transform and cache the data
     const products = data.map(transformProductFromDb)
     cache.set(cacheKey, products, APP_CONFIG.CACHE.PRODUCTS_TTL)
@@ -218,9 +238,13 @@ export async function getProducts(filters?: ProductFilters): Promise<ServiceResp
 
 export async function getProductById(id: string): Promise<ServiceResponse<Product | null>> {
   try {
+    console.log("=== GET PRODUCT BY ID SERVICE ===")
+    console.log("Product ID:", id)
+
     // Check cache first
     const cachedProduct = cache.get<Product>(cacheKeys.productById(id))
     if (cachedProduct) {
+      console.log("Returning cached product:", cachedProduct.name)
       return { data: cachedProduct, error: null }
     }
 
@@ -228,8 +252,10 @@ export async function getProductById(id: string): Promise<ServiceResponse<Produc
 
     if (error) {
       if (error.code === "PGRST116") {
+        console.log("Product not found")
         return { data: null, error: null }
       }
+      console.error("Error fetching product by ID:", error)
       return {
         data: null,
         error: createError(ErrorType.DATABASE, "Failed to fetch product", error, 500),
@@ -239,8 +265,10 @@ export async function getProductById(id: string): Promise<ServiceResponse<Produc
     const product = transformProductFromDb(data)
     cache.set(cacheKeys.productById(id), product)
 
+    console.log("Fetched product from DB:", product.name)
     return { data: product, error: null }
   } catch (error) {
+    console.error("Error in getProductById:", error)
     return {
       data: null,
       error: handleError(error, "Failed to fetch product by ID"),
@@ -252,9 +280,19 @@ export async function addProduct(
   product: Omit<Product, "id" | "createdAt" | "updatedAt">,
 ): Promise<ServiceResponse<Product>> {
   try {
+    console.log("=== ADD PRODUCT SERVICE ===")
+    console.log("Product data:", product)
+
     // Validate product
-    const validation = validateProduct(product)
+    const validation = validateProduct({
+      ...product,
+      id: "temp-id", // Temporary ID for validation
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
     if (!validation.success) {
+      console.error("Validation failed:", validation.error.issues)
       return {
         data: null,
         error: createError(
@@ -268,34 +306,44 @@ export async function addProduct(
 
     // Generate ID and timestamps
     const newProduct: Product = {
-      ...validation.data,
+      ...product,
       id: `prod_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       createdAt: new Date(),
       updatedAt: new Date(),
     }
 
-    const formattedProduct = transformProductToDb(newProduct)
+    console.log("New product with ID:", newProduct)
 
-    const { error } = await supabase.from("products").insert(formattedProduct)
+    const formattedProduct = transformProductToDb(newProduct)
+    console.log("Formatted product for DB:", formattedProduct)
+
+    const { data, error } = await supabase.from("products").insert(formattedProduct).select().single()
 
     if (error) {
+      console.error("Supabase insert error:", error)
       return {
         data: null,
         error: createError(ErrorType.DATABASE, "Failed to add product", error, 500),
       }
     }
 
+    console.log("Product inserted successfully:", data)
+
+    // Transform the returned data
+    const insertedProduct = transformProductFromDb(data)
+
     // Update cache
     cache.delete(cacheKeys.products())
-    cache.set(cacheKeys.productById(newProduct.id), newProduct)
+    cache.set(cacheKeys.productById(insertedProduct.id), insertedProduct)
 
-    if (newProduct.barcode) {
-      cache.set(cacheKeys.productByBarcode(newProduct.barcode), newProduct)
-      barcodeCache.set(newProduct.barcode, true)
+    if (insertedProduct.barcode) {
+      cache.set(cacheKeys.productByBarcode(insertedProduct.barcode), insertedProduct)
+      barcodeCache.set(insertedProduct.barcode, true)
     }
 
-    return { data: newProduct, error: null }
+    return { data: insertedProduct, error: null }
   } catch (error) {
+    console.error("Error in addProduct:", error)
     return {
       data: null,
       error: handleError(error, "Failed to add product"),
@@ -305,9 +353,14 @@ export async function addProduct(
 
 export async function updateProduct(id: string, updates: Partial<Product>): Promise<ServiceResponse<Product>> {
   try {
+    console.log("=== UPDATE PRODUCT SERVICE ===")
+    console.log("Product ID:", id)
+    console.log("Updates:", updates)
+
     // Get existing product
     const existingResult = await getProductById(id)
     if (existingResult.error || !existingResult.data) {
+      console.error("Product not found for update")
       return {
         data: null,
         error: createError(ErrorType.NOT_FOUND, "Product not found", null, 404),
@@ -321,9 +374,12 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
       updatedAt: new Date(),
     }
 
+    console.log("Merged product data:", updatedProduct)
+
     // Validate updated product
     const validation = validateProduct(updatedProduct)
     if (!validation.success) {
+      console.error("Validation failed for update:", validation.error.issues)
       return {
         data: null,
         error: createError(
@@ -336,27 +392,35 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
     }
 
     const formattedProduct = transformProductToDb(validation.data)
+    console.log("Formatted product for DB update:", formattedProduct)
 
-    const { error } = await supabase.from("products").update(formattedProduct).eq("id", id)
+    const { data, error } = await supabase.from("products").update(formattedProduct).eq("id", id).select().single()
 
     if (error) {
+      console.error("Supabase update error:", error)
       return {
         data: null,
         error: createError(ErrorType.DATABASE, "Failed to update product", error, 500),
       }
     }
 
+    console.log("Product updated successfully:", data)
+
+    // Transform the returned data
+    const updatedProductResult = transformProductFromDb(data)
+
     // Update cache
     cache.delete(cacheKeys.products())
-    cache.set(cacheKeys.productById(id), validation.data)
+    cache.set(cacheKeys.productById(id), updatedProductResult)
 
-    if (validation.data.barcode) {
-      cache.set(cacheKeys.productByBarcode(validation.data.barcode), validation.data)
-      barcodeCache.set(validation.data.barcode, true)
+    if (updatedProductResult.barcode) {
+      cache.set(cacheKeys.productByBarcode(updatedProductResult.barcode), updatedProductResult)
+      barcodeCache.set(updatedProductResult.barcode, true)
     }
 
-    return { data: validation.data, error: null }
+    return { data: updatedProductResult, error: null }
   } catch (error) {
+    console.error("Error in updateProduct:", error)
     return {
       data: null,
       error: handleError(error, "Failed to update product"),
@@ -366,6 +430,9 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
 
 export async function deleteProduct(productId: string): Promise<ServiceResponse<boolean>> {
   try {
+    console.log("=== DELETE PRODUCT SERVICE ===")
+    console.log("Product ID:", productId)
+
     // Get product to find its barcode before deletion
     const { data: product } = await supabase.from("products").select("barcode").eq("id", productId).single()
 
@@ -373,11 +440,14 @@ export async function deleteProduct(productId: string): Promise<ServiceResponse<
     const { error } = await supabase.from("products").delete().eq("id", productId)
 
     if (error) {
+      console.error("Supabase delete error:", error)
       return {
         data: null,
         error: createError(ErrorType.DATABASE, "Failed to delete product from database", error, 500),
       }
     }
+
+    console.log("Product deleted successfully")
 
     // Update cache
     cache.delete(cacheKeys.products())
@@ -391,6 +461,7 @@ export async function deleteProduct(productId: string): Promise<ServiceResponse<
 
     return { data: true, error: null }
   } catch (error) {
+    console.error("Error in deleteProduct:", error)
     return {
       data: null,
       error: handleError(error, "Failed to delete product"),

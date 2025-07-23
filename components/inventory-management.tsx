@@ -1,9 +1,7 @@
 "use client"
 
-import { useEffect } from "react"
-
-import { useState, useRef } from "react"
-import { Plus, Pencil, Trash2, Save, X, Tag, Loader2 } from "lucide-react"
+import { useEffect, useState, useRef } from "react"
+import { Plus, Pencil, Trash2, Save, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -15,9 +13,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { toast } from "@/components/ui/use-toast"
-import { deleteProduct } from "@/services/product-service"
+import { addProduct, updateProduct, deleteProduct } from "@/services/product-service"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { useFocusTrap } from "@/hooks/use-focus-trap"
+import { TagInputWithSuggestions } from "@/components/tag-input-with-suggestions"
 import type { Product } from "@/types/pos-types"
 
 interface InventoryManagementProps {
@@ -32,9 +31,13 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedCategory, setSelectedCategory] = useState<string>("all")
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [productToDelete, setProductToDelete] = useState<string | null>(null)
   const [productToDeleteName, setProductToDeleteName] = useState<string>("")
+
+  // Fallback: no-op if parent did not provide a handler
+  const onProductsChangeSafe = typeof onProductsChange === "function" ? onProductsChange : () => {}
 
   // Use our focus trap hook for the product dialog
   const productDialogRef = useFocusTrap(isAddProductOpen)
@@ -51,7 +54,6 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
     imageUrl: string
     barcode: string
     tags: string[]
-    currentTag: string
     quickAdd: boolean
     customPrice: boolean
   }>({
@@ -62,7 +64,6 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
     imageUrl: "",
     barcode: "",
     tags: [],
-    currentTag: "",
     quickAdd: false,
     customPrice: false,
   })
@@ -97,87 +98,142 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
       imageUrl: "",
       barcode: "",
       tags: [],
-      currentTag: "",
       quickAdd: false,
       customPrice: false,
     })
   }
 
-  const handleAddTag = () => {
-    if (newProduct.currentTag.trim() && !newProduct.tags.includes(newProduct.currentTag.trim())) {
-      setNewProduct({
-        ...newProduct,
-        tags: [...newProduct.tags, newProduct.currentTag.trim()],
-        currentTag: "",
-      })
-    }
-  }
+  const handleSaveProduct = async () => {
+    console.log("=== SAVE PRODUCT DEBUG ===")
+    console.log("Form data:", newProduct)
+    console.log("Editing product:", editingProduct)
 
-  const handleRemoveTag = (tagToRemove: string) => {
-    setNewProduct({
-      ...newProduct,
-      tags: newProduct.tags.filter((tag) => tag !== tagToRemove),
-    })
-  }
-
-  const handleSaveProduct = () => {
-    if (!newProduct.name || !newProduct.price) return
-
-    const price = Number.parseFloat(newProduct.price)
-    if (isNaN(price) || price < 0) return
-
-    // Determine which category to use
-    const category = newProduct.newCategory.trim() ? newProduct.newCategory.trim() : newProduct.category
-
-    // If custom price is selected, set price to 0
-    const finalPrice = newProduct.customPrice ? 0 : price
-
-    const productToSave: Product = {
-      id: editingProduct ? editingProduct.id : `p-${Date.now()}`,
-      name: newProduct.name.trim(),
-      price: finalPrice,
-      category: newProduct.customPrice ? "custom-price" : category,
-      imageUrl: newProduct.imageUrl || "/placeholder.svg?height=100&width=100",
-      barcode: newProduct.barcode.trim() || undefined,
-      stock: 0, // Default stock to 0 as per requirement
-      quickAdd: newProduct.quickAdd,
-      tags: newProduct.tags,
-    }
-
-    if (editingProduct) {
-      // Update existing product
-      onProductsChange(products.map((p) => (p.id === editingProduct.id ? productToSave : p)))
+    // Validation
+    if (!newProduct.name.trim()) {
+      console.error("Validation failed: Product name is required")
       toast({
-        title: "Product Updated",
-        description: `${productToSave.name} has been updated.`,
+        title: "Validation Error",
+        description: "Product name is required",
+        variant: "destructive",
       })
-    } else {
-      // Add new product
-      onProductsChange([...products, productToSave])
-      toast({
-        title: "Product Added",
-        description: `${productToSave.name} has been added to inventory.`,
-      })
+      return
     }
 
-    setIsAddProductOpen(false)
-    setEditingProduct(null)
-    resetNewProductForm()
+    if (
+      !newProduct.customPrice &&
+      (!newProduct.price || isNaN(Number(newProduct.price)) || Number(newProduct.price) < 0)
+    ) {
+      console.error("Validation failed: Valid price is required")
+      toast({
+        title: "Validation Error",
+        description: "Valid price is required",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsSaving(true)
+
+    try {
+      const price = newProduct.customPrice ? 0 : Number.parseFloat(newProduct.price)
+
+      // Determine which category to use
+      const category = newProduct.newCategory.trim()
+        ? newProduct.newCategory.trim()
+        : newProduct.category || "Uncategorized"
+
+      const finalCategory = newProduct.customPrice ? "custom-price" : category
+
+      const productData: Omit<Product, "id" | "createdAt" | "updatedAt"> = {
+        name: newProduct.name.trim(),
+        price: price,
+        category: finalCategory,
+        imageUrl: newProduct.imageUrl || "/placeholder.svg?height=100&width=100",
+        barcode: newProduct.barcode.trim() || undefined,
+        stock: 0,
+        quickAdd: newProduct.quickAdd,
+        tags: newProduct.tags,
+        customPrice: newProduct.customPrice,
+      }
+
+      console.log("Product data to save:", productData)
+
+      if (editingProduct) {
+        // Update existing product
+        console.log("Updating existing product with ID:", editingProduct.id)
+
+        const { data: updatedProduct, error } = await updateProduct(editingProduct.id, productData)
+
+        if (error) {
+          console.error("Update product error:", error)
+          throw new Error(error.message)
+        }
+
+        if (updatedProduct) {
+          console.log("Product updated successfully:", updatedProduct)
+
+          // Update local state
+          const updatedProducts = products.map((p) => (p.id === editingProduct.id ? updatedProduct : p))
+          onProductsChangeSafe(updatedProducts)
+
+          toast({
+            title: "Product Updated",
+            description: `${updatedProduct.name} has been updated successfully.`,
+          })
+        }
+      } else {
+        // Add new product
+        console.log("Adding new product")
+
+        const { data: newProductResult, error } = await addProduct(productData)
+
+        if (error) {
+          console.error("Add product error:", error)
+          throw new Error(error.message)
+        }
+
+        if (newProductResult) {
+          console.log("Product added successfully:", newProductResult)
+
+          // Update local state
+          onProductsChangeSafe([...products, newProductResult])
+
+          toast({
+            title: "Product Added",
+            description: `${newProductResult.name} has been added to inventory successfully.`,
+          })
+        }
+      }
+
+      // Close dialog and reset form
+      setIsAddProductOpen(false)
+      setEditingProduct(null)
+      resetNewProductForm()
+    } catch (error) {
+      console.error("Save product error:", error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to save product. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const handleEditProduct = (product: Product) => {
+    console.log("Editing product:", product)
     setEditingProduct(product)
     setNewProduct({
       name: product.name,
       price: product.customPrice ? "0" : product.price.toString(),
       category: product.category === "custom-price" ? "" : product.category,
       newCategory: "",
-      imageUrl: product.imageUrl,
+      imageUrl: product.imageUrl || "",
       barcode: product.barcode || "",
       tags: product.tags || [],
-      currentTag: "",
       quickAdd: !!product.quickAdd,
-      customPrice: product.category === "custom-price",
+      customPrice: product.category === "custom-price" || !!product.customPrice,
     })
     setIsAddProductOpen(true)
   }
@@ -193,16 +249,21 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
 
     setIsDeleting(true)
     try {
-      // Delete from Supabase
+      console.log("Deleting product:", productToDelete)
+
       const { data: success, error } = await deleteProduct(productToDelete)
 
       if (error) {
+        console.error("Delete product error:", error)
         throw new Error(error.message)
       }
 
       if (success) {
+        console.log("Product deleted successfully")
+
         // Update local state
-        onProductsChange(products.filter((p) => p.id !== productToDelete))
+        onProductsChangeSafe(products.filter((p) => p.id !== productToDelete))
+
         toast({
           title: "Product Deleted",
           description: "The product has been removed from inventory.",
@@ -214,11 +275,12 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
       console.error("Error deleting product:", error)
       toast({
         title: "Error",
-        description: "Failed to delete product. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to delete product. Please try again.",
         variant: "destructive",
       })
     } finally {
       setIsDeleting(false)
+      setDeleteConfirmOpen(false)
       setProductToDelete(null)
       setProductToDeleteName("")
     }
@@ -314,7 +376,7 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                           )}
                         </div>
                         <div className="col-span-1">
-                          {product.category === "custom-price" ? (
+                          {product.category === "custom-price" || product.customPrice ? (
                             <Badge variant="outline" className="border-purple-200 text-purple-700 bg-purple-50">
                               Custom
                             </Badge>
@@ -408,23 +470,28 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
       <Dialog
         open={isAddProductOpen}
         onOpenChange={(open) => {
-          if (!open) setIsAddProductOpen(false)
+          if (!open && !isSaving) {
+            setIsAddProductOpen(false)
+            setEditingProduct(null)
+            resetNewProductForm()
+          }
         }}
       >
         <DialogContent
-          className="sm:max-w-[600px]"
+          className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto"
           aria-describedby="product-form-desc"
           ref={productDialogRef}
           onEscapeKeyDown={(e) => {
-            // Prevent automatic closing with Escape key
-            e.preventDefault()
+            if (isSaving) {
+              e.preventDefault()
+            }
           }}
           onPointerDownOutside={(e) => {
-            // Prevent automatic closing when clicking outside
-            e.preventDefault()
+            if (isSaving) {
+              e.preventDefault()
+            }
           }}
         >
-          {/* Add a screen reader only description */}
           <p id="product-form-desc" className="sr-only">
             Use this form to {editingProduct ? "edit an existing" : "add a new"} product to inventory. Fill in the
             required fields marked with an asterisk and press Save when done.
@@ -445,6 +512,7 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                   required
                   ref={productNameInputRef}
                   aria-required="true"
+                  disabled={isSaving}
                 />
               </div>
               <div className="space-y-2">
@@ -457,10 +525,10 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                   value={newProduct.price}
                   onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })}
                   placeholder="0.00"
-                  disabled={newProduct.customPrice}
-                  required
-                  aria-required="true"
-                  aria-disabled={newProduct.customPrice}
+                  disabled={newProduct.customPrice || isSaving}
+                  required={!newProduct.customPrice}
+                  aria-required={!newProduct.customPrice}
+                  aria-disabled={newProduct.customPrice || isSaving}
                 />
               </div>
             </div>
@@ -469,15 +537,14 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
               <div className="space-y-2">
                 <Label htmlFor="category">Category</Label>
                 <Select
-                  value={newProduct.category || "default-category"}
+                  value={newProduct.category || ""}
                   onValueChange={(value) => setNewProduct({ ...newProduct, category: value })}
-                  disabled={newProduct.customPrice}
+                  disabled={newProduct.customPrice || isSaving}
                 >
-                  <SelectTrigger id="category" aria-disabled={newProduct.customPrice}>
+                  <SelectTrigger id="category" aria-disabled={newProduct.customPrice || isSaving}>
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="default-category">Select a category</SelectItem>
                     {categories
                       .filter((category) => category !== "")
                       .map((category) => (
@@ -495,8 +562,8 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                   value={newProduct.newCategory}
                   onChange={(e) => setNewProduct({ ...newProduct, newCategory: e.target.value })}
                   placeholder="New category name"
-                  disabled={newProduct.customPrice}
-                  aria-disabled={newProduct.customPrice}
+                  disabled={newProduct.customPrice || isSaving}
+                  aria-disabled={newProduct.customPrice || isSaving}
                 />
               </div>
             </div>
@@ -510,6 +577,7 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                   onChange={(e) => setNewProduct({ ...newProduct, barcode: e.target.value })}
                   placeholder="Barcode or SKU"
                   aria-label="Barcode or SKU (optional)"
+                  disabled={isSaving}
                 />
               </div>
               <div className="space-y-2">
@@ -520,43 +588,19 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                   onChange={(e) => setNewProduct({ ...newProduct, imageUrl: e.target.value })}
                   placeholder="https://example.com/image.jpg"
                   aria-label="Image URL (optional)"
+                  disabled={isSaving}
                 />
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label>Tags</Label>
-              <div className="flex flex-wrap gap-2 mb-2" aria-label="Current tags">
-                {newProduct.tags.map((tag) => (
-                  <Badge key={tag} variant="secondary" className="flex items-center gap-1">
-                    {tag}
-                    <X
-                      className="h-3 w-3 cursor-pointer"
-                      onClick={() => handleRemoveTag(tag)}
-                      aria-label={`Remove ${tag} tag`}
-                    />
-                  </Badge>
-                ))}
-                {newProduct.tags.length === 0 && <span className="text-xs text-slate-500">No tags added yet</span>}
-              </div>
-              <div className="flex gap-2">
-                <Input
-                  value={newProduct.currentTag}
-                  onChange={(e) => setNewProduct({ ...newProduct, currentTag: e.target.value })}
-                  placeholder="Add a tag"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault()
-                      handleAddTag()
-                    }
-                  }}
-                  aria-label="Enter tag name"
-                />
-                <Button type="button" onClick={handleAddTag} size="sm" aria-label="Add tag">
-                  <Tag className="h-4 w-4 mr-1" /> Add
-                </Button>
-              </div>
-            </div>
+            {/* Enhanced Tag Input with Suggestions */}
+            <TagInputWithSuggestions
+              tags={newProduct.tags}
+              onTagsChange={(tags) => setNewProduct({ ...newProduct, tags })}
+              disabled={isSaving}
+              placeholder="Add a tag"
+              label="Tags"
+            />
 
             <Separator />
 
@@ -565,8 +609,9 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                 <Switch
                   id="quickAdd"
                   checked={newProduct.quickAdd}
-                  onCheckedChange={(checked) => setNewProduct({ ...newProduct, quickAdd: checked })}
+                  onCheckedChange={(checked) => !isSaving && setNewProduct({ ...newProduct, quickAdd: checked })}
                   aria-label="Add to Quick Access buttons"
+                  disabled={isSaving}
                 />
                 <Label htmlFor="quickAdd">Quick Add Product</Label>
               </div>
@@ -575,6 +620,7 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                   id="customPrice"
                   checked={newProduct.customPrice}
                   onCheckedChange={(checked) =>
+                    !isSaving &&
                     setNewProduct({
                       ...newProduct,
                       customPrice: checked,
@@ -582,22 +628,44 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
                     })
                   }
                   aria-label="Set as custom price product"
+                  disabled={isSaving}
                 />
                 <Label htmlFor="customPrice">Custom Price Product</Label>
               </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsAddProductOpen(false)} aria-label="Cancel and close dialog">
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (!isSaving) {
+                  setIsAddProductOpen(false)
+                  setEditingProduct(null)
+                  resetNewProductForm()
+                }
+              }}
+              aria-label="Cancel and close dialog"
+              disabled={isSaving}
+            >
               Cancel
             </Button>
             <Button
               onClick={handleSaveProduct}
               className="bg-emerald-600 hover:bg-emerald-700"
               aria-label={editingProduct ? "Update product" : "Save new product"}
+              disabled={isSaving}
             >
-              <Save className="mr-2 h-4 w-4" />
-              {editingProduct ? "Update Product" : "Save Product"}
+              {isSaving ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  {editingProduct ? "Updating..." : "Saving..."}
+                </>
+              ) : (
+                <>
+                  <Save className="mr-2 h-4 w-4" />
+                  {editingProduct ? "Update Product" : "Save Product"}
+                </>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -607,9 +675,11 @@ export default function InventoryManagement({ products, onProductsChange }: Inve
       <ConfirmationDialog
         isOpen={deleteConfirmOpen}
         onClose={() => {
-          setDeleteConfirmOpen(false)
-          setProductToDelete(null)
-          setProductToDeleteName("")
+          if (!isDeleting) {
+            setDeleteConfirmOpen(false)
+            setProductToDelete(null)
+            setProductToDeleteName("")
+          }
         }}
         onConfirm={handleDeleteConfirm}
         title="Delete Product"
